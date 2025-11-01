@@ -17,7 +17,9 @@
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://*.youtube.com/*",
-    "https://*.googlevideo.com/*"
+    "https://*.googlevideo.com/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -27,6 +29,11 @@
       "matches": ["*://*.youtube.com/watch*"],
       "js": ["contentScript.js"],
       "css": ["styles.css"]
+    },
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["meetContentScript.js"],
+      "run_at": "document_idle"
     }
   ]
 }

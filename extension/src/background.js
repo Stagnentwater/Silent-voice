@@ -191,3 +191,27 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
     }
   });
 });
+
+// Stream poses over a Port to avoid message size limits and mixed content from pages
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'sv-port') return;
+  port.onMessage.addListener(async (msg) => {
+    if (!msg || msg.type !== 'FETCH_POSE') return;
+    try {
+      const resp = await fetch('http://127.0.0.1:5000/pose', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ words: msg.words || '' }),
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const CHUNK = 200;
+      for (let i = 0; i < data.length; i += CHUNK) {
+        port.postMessage({ type: 'POSE_CHUNK', frames: data.slice(i, i + CHUNK) });
+      }
+      port.postMessage({ type: 'POSE_DONE' });
+    } catch (e) {
+      port.postMessage({ type: 'POSE_ERROR', message: String(e) });
+    }
+  });
+});
