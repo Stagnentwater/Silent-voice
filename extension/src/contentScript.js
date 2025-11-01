@@ -279,3 +279,95 @@ document.addEventListener(
 
 initializeExtension();
 observeUrlChanges();
+
+(() => {
+  // Lightweight overlay + loader that doesn’t interfere with existing logic
+  let overlay, canvas, ctx, loader, animHandle;
+  let frames = [];
+  let idx = 0;
+
+  function ensureOverlay() {
+    if (overlay) return;
+    overlay = document.createElement("div");
+    overlay.style.cssText =
+      "position:fixed;right:16px;bottom:16px;z-index:2147483647;background:#000c;color:#fff;padding:8px;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,.4);display:flex;flex-direction:column;gap:6px;";
+    const header = document.createElement("div");
+    header.textContent = "Sign Preview";
+    header.style.cssText = "font:600 12px system-ui,sans-serif";
+    loader = document.createElement("div");
+    loader.textContent = "Loading...";
+    loader.style.cssText = "font:12px system-ui,sans-serif;opacity:.8";
+    canvas = document.createElement("canvas");
+    canvas.width = 320; canvas.height = 240;
+    canvas.style.cssText = "background:#111;border-radius:4px;";
+    ctx = canvas.getContext("2d");
+    const btn = document.createElement("button");
+    btn.textContent = "Close";
+    btn.style.cssText = "align-self:flex-end;font-size:11px;padding:2px 6px;cursor:pointer;";
+    btn.onclick = destroyOverlay;
+    overlay.append(header, loader, canvas, btn);
+    document.documentElement.appendChild(overlay);
+  }
+
+  function destroyOverlay() {
+    if (animHandle) cancelAnimationFrame(animHandle);
+    animHandle = null; frames = []; idx = 0;
+    overlay?.remove(); overlay = null; canvas = null; ctx = null; loader = null;
+  }
+
+  function drawFrame(f) {
+    if (!ctx || !f) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const draw = (pts, color) => {
+      if (!pts) return;
+      ctx.fillStyle = color;
+      for (const p of pts) {
+        if (!p) continue;
+        ctx.beginPath();
+        ctx.arc(p.x * canvas.width, p.y * canvas.height, 2, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    };
+    draw(f.left_hand_landmarks, "#2dd4bf");
+    draw(f.right_hand_landmarks, "#60a5fa");
+    draw(f.pose_landmarks, "#a78bfa");
+    draw(f.face_landmarks, "#fca5a5");
+  }
+
+  function animate() {
+    if (!frames.length) return;
+    drawFrame(frames[idx % frames.length]);
+    idx++;
+    animHandle = requestAnimationFrame(animate);
+  }
+
+  function requestPoses(words) {
+    const port = chrome.runtime.connect({ name: "sv-port" });
+    frames = []; idx = 0;
+    if (loader) loader.style.display = "";
+
+    port.onMessage.addListener((msg) => {
+      if (msg?.type === "POSE_START") {
+        if (loader) loader.textContent = "Loading...";
+      } else if (msg?.type === "POSE_CHUNK" && Array.isArray(msg.frames)) {
+        if (loader) loader.style.display = "none";
+        frames.push(...msg.frames);
+        if (!animHandle) animHandle = requestAnimationFrame(animate);
+      } else if (msg?.type === "POSE_DONE") {
+        // no-op
+      } else if (msg?.type === "POSE_ERROR") {
+        if (loader) loader.textContent = `Error: ${msg.message}`;
+        console.warn("[silent-voice] pose error:", msg.message);
+      }
+    });
+
+    port.postMessage({ type: "FETCH_POSE", words });
+  }
+
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg?.type === "SV_SHOW_TEXT" && msg.text) {
+      ensureOverlay();
+      requestPoses(msg.text);
+    }
+  });
+})();
