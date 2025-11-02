@@ -28,6 +28,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Return true to indicate we will call sendResponse asynchronously
   return true;
 });
+// (Meet/MiroTalk/offscreen features removed; focus on YouTube + selective text)
 
 // Context menu for selected text -> Show in Sign Language
 chrome.runtime.onInstalled.addListener(() => {

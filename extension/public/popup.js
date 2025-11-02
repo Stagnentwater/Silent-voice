@@ -12,6 +12,17 @@ document.addEventListener('DOMContentLoaded', () => {
     badge.classList.toggle('inactive', !active);
   }
 
+  function ensureMeetScript(tabId, cb) {
+    try {
+      chrome.scripting.executeScript(
+        { target: { tabId }, files: ['meetContentScript.js'] },
+        () => cb && cb()
+      );
+    } catch (e) {
+      cb && cb();
+    }
+  }
+
   chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
     const tab = (tabs && tabs[0]) || null;
     const url = tab && tab.url ? new URL(tab.url) : null;
@@ -31,7 +42,13 @@ document.addEventListener('DOMContentLoaded', () => {
       meetBtn.addEventListener('click', () => {
         if (!tab?.id) return;
         chrome.tabs.sendMessage(tab.id, { type: 'SV_TOGGLE_MEET_PANEL', enable: true }, () => {
-          // Optional: handle no receiver
+          if (chrome.runtime.lastError) {
+            ensureMeetScript(tab.id, () => {
+              setTimeout(() => {
+                chrome.tabs.sendMessage(tab.id, { type: 'SV_TOGGLE_MEET_PANEL', enable: true });
+              }, 100);
+            });
+          }
         });
       });
     }

@@ -2,15 +2,15 @@ import os
 import re
 import json
 import gzip
-import google.generativeai as genai
 from copy import deepcopy
 
+import google.generativeai as genai
 import dotenv
 import psycopg2
 from flask_cors import CORS
 from pgvector.psycopg2 import register_vector
 from sentence_transformers import SentenceTransformer
-from flask import Flask, Response, request, make_response
+from flask import Flask, Response, request, make_response, jsonify
 
 
 dotenv.load_dotenv()
@@ -216,5 +216,8 @@ def pose():
     return response
 
 
+
+
 if __name__ == "__main__":
     app.run()
+

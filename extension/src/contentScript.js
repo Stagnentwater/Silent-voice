@@ -116,31 +116,19 @@ function processQueue() {
     const words = segment.text;
     segment.loading = true;
 
-    return fetch('http://127.0.0.1:5000/pose', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        words,
-      }),
-    })
-      .then((response) => {
-        if (!response.ok) {
-          throw new Error(`POSE request failed: ${response.status}`);
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage({ type: 'FETCH_POSE', words }, (res) => {
+        if (chrome.runtime.lastError || !res || !res.ok) {
+          const err = chrome.runtime.lastError?.message || res?.error || 'fetch failed';
+          console.debug('[sign-engine][background] /pose error', err);
+          segment.loading = false;
+          return resolve(segment);
         }
-        return response.json();
-      })
-      .then((data) => {
-        segment.poses = data;
+        segment.poses = res.data;
         segment.loading = false;
-        return segment;
-      })
-      .catch((err) => {
-        console.debug('[sign-engine] /pose error', err?.message || err);
-        segment.loading = false;
-        return segment; // proceed without poses
+        resolve(segment);
       });
+    });
   });
 
   Promise.all(promises).then((updatedBatch) => {

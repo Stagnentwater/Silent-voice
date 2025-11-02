@@ -13,7 +13,7 @@
     "default_title": "Extension",
     "default_popup": "popup.html"
   },
-  "permissions": ["scripting", "activeTab", "contextMenus", "tabs"],
+  "permissions": ["scripting", "activeTab", "contextMenus"],
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://*.youtube.com/*",
@@ -29,11 +29,6 @@
       "matches": ["*://*.youtube.com/watch*"],
       "js": ["contentScript.js"],
       "css": ["styles.css"]
-    },
-    {
-      "matches": ["https://meet.google.com/*"],
-      "js": ["meetContentScript.js"],
-      "run_at": "document_idle"
     }
   ]
 }
