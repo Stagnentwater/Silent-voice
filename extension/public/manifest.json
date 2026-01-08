@@ -18,6 +18,7 @@
     "https://www.youtube.com/*",
     "https://*.youtube.com/*",
     "https://*.googlevideo.com/*",
+    "https://meet.google.com/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],
@@ -28,6 +29,11 @@
     {
       "matches": ["*://*.youtube.com/watch*"],
       "js": ["contentScript.js"],
+      "css": ["styles.css"]
+    },
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["meetContentScript.js"],
       "css": ["styles.css"]
     }
   ]
