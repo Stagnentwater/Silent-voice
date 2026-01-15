@@ -2,6 +2,8 @@ import os
 import re
 import json
 import gzip
+import time
+import uuid
 from copy import deepcopy
 
 import google.generativeai as genai
@@ -85,6 +87,11 @@ def add_cors_pna_headers(response):
         "Access-Control-Allow-Headers", "Content-Type, Authorization"
     )
     response.headers.setdefault("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+    # Allow browser clients (extension) to read timing headers.
+    response.headers.setdefault(
+        "Access-Control-Expose-Headers",
+        "Server-Timing, X-Response-Time-Ms, X-Request-Id",
+    )
     # Chrome PNA requirement when calling 127.0.0.1 from a public context
     response.headers.setdefault("Access-Control-Allow-Private-Network", "true")
     return response
@@ -93,15 +100,24 @@ def add_cors_pna_headers(response):
 @app.route("/pose", methods=["POST"])
 def pose():
 
+    request_id = uuid.uuid4().hex[:12]
+    t0 = time.perf_counter()
+    log_timings = os.getenv("SV_LOG_TIMINGS", "1") == "1"
+
+    t_parse0 = time.perf_counter()
+
     data = request.get_json()
     words = data.get("words", "").lower().strip()
     animations = []
+
+    t_parse1 = time.perf_counter()
 
     if not words:
         return Response(status=400)
 
     if words != "hello":
         if gemini_model is not None:
+            t_gem0 = time.perf_counter()
             try:
                 prompt = (
                     "Convert the following English phrase into ASL Gloss grammar. "
@@ -117,6 +133,8 @@ def pose():
             except Exception as e:
                 # Graceful degradation: if Gemini fails (e.g., rate limit), proceed without rephrasing
                 app.logger.warning(f"Gemini rephrase failed: {e}")
+            finally:
+                t_gem1 = time.perf_counter()
         else:
             app.logger.warning("GEMINI_API_KEY not set; skipping ASL conversion")
 
@@ -128,17 +146,28 @@ def pose():
     # Running frame counter to assign frame indices consistently
     frame_counter = 0
 
+    t_embed_total = 0.0
+    t_db_total = 0.0
+    t_build_total = 0.0
+
     cur = db.cursor()
     for word in words:
         # Normalize embeddings to make cosine distance meaningful
+        t_e0 = time.perf_counter()
         embedding = embedding_model.encode(word, normalize_embeddings=True)
+        t_e1 = time.perf_counter()
+        t_embed_total += t_e1 - t_e0
 
+        t_q0 = time.perf_counter()
         cur.execute(
             "SELECT word, poses, (embedding <=> %s) AS cosine_distance FROM signs ORDER BY cosine_distance ASC LIMIT 1",
             (embedding,),
         )
         result = cur.fetchone()
+        t_q1 = time.perf_counter()
+        t_db_total += t_q1 - t_q0
 
+        t_b0 = time.perf_counter()
         animation = []
 
         # Use cosine distance threshold (lower = more similar). Fallback if too far or missing.
@@ -208,10 +237,69 @@ def pose():
             animations.append(normalized)
             frame_counter += 1
 
+        t_b1 = time.perf_counter()
+        t_build_total += t_b1 - t_b0
+
+    try:
+        cur.close()
+    except Exception:
+        pass
+
+    t_gz0 = time.perf_counter()
     content = gzip.compress(json.dumps(animations).encode("utf8"), 5)
+    t_gz1 = time.perf_counter()
+
+    t1 = time.perf_counter()
+    total_ms = (t1 - t0) * 1000.0
+    parse_ms = (t_parse1 - t_parse0) * 1000.0
+    embed_ms = t_embed_total * 1000.0
+    db_ms = t_db_total * 1000.0
+    build_ms = t_build_total * 1000.0
+    gzip_ms = (t_gz1 - t_gz0) * 1000.0
+
+    gem_ms = None
+    try:
+        gem_ms = (t_gem1 - t_gem0) * 1000.0  # type: ignore[name-defined]
+    except Exception:
+        gem_ms = None
+
     response = make_response(content)
     response.headers["Content-length"] = len(content)
     response.headers["Content-Encoding"] = "gzip"
+    response.headers.setdefault("Content-Type", "application/json")
+
+    response.headers["X-Request-Id"] = request_id
+    response.headers["X-Response-Time-Ms"] = f"{total_ms:.1f}"
+    server_timing_parts = [
+        f"total;dur={total_ms:.1f}",
+        f"parse;dur={parse_ms:.1f}",
+    ]
+    if gem_ms is not None:
+        server_timing_parts.append(f"gemini;dur={gem_ms:.1f}")
+    server_timing_parts.extend(
+        [
+            f"embed;dur={embed_ms:.1f}",
+            f"db;dur={db_ms:.1f}",
+            f"build;dur={build_ms:.1f}",
+            f"gzip;dur={gzip_ms:.1f}",
+        ]
+    )
+    response.headers["Server-Timing"] = ", ".join(server_timing_parts)
+
+    if log_timings:
+        app.logger.info(
+            "[pose] id=%s words=%d frames=%d total=%.1fms parse=%.1fms gemini=%sms embed=%.1fms db=%.1fms build=%.1fms gzip=%.1fms",
+            request_id,
+            len(words),
+            len(animations),
+            total_ms,
+            parse_ms,
+            f"{gem_ms:.1f}" if gem_ms is not None else "-",
+            embed_ms,
+            db_ms,
+            build_ms,
+            gzip_ms,
+        )
 
     return response
 
