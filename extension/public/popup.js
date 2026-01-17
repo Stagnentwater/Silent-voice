@@ -5,6 +5,53 @@ document.addEventListener('DOMContentLoaded', () => {
   const meetHow = document.getElementById('meet-how');
   const meetBtn = document.getElementById('meet-insert-btn');
 
+  const poseUrlInput = document.getElementById('pose-api-url');
+  const poseSaveBtn = document.getElementById('pose-save-btn');
+  const poseUseLocalBtn = document.getElementById('pose-use-local-btn');
+  const poseTestBtn = document.getElementById('pose-test-btn');
+  const poseStatus = document.getElementById('pose-status');
+
+  const DEFAULT_POSE_URL = 'http://127.0.0.1:5000/pose';
+
+  function normalizePoseUrl(url) {
+    const u = (url || '').trim();
+    if (!u) return DEFAULT_POSE_URL;
+    if (!/\/pose\b/i.test(u)) return u.replace(/\/+$/, '') + '/pose';
+    return u;
+  }
+
+  function setStatus(text, kind) {
+    if (!poseStatus) return;
+    poseStatus.textContent = text || '';
+    poseStatus.style.color = kind === 'error' ? '#b91c1c' : kind === 'ok' ? '#166534' : '#475569';
+  }
+
+  function loadPoseUrl() {
+    if (!poseUrlInput) return;
+    try {
+      chrome.storage.sync.get({ poseApiUrl: '' }, (items) => {
+        const url = normalizePoseUrl(items.poseApiUrl);
+        // Show as base URL when possible
+        poseUrlInput.value = url.replace(/\/pose\b.*/i, '');
+        setStatus(`Using: ${url}`, 'muted');
+      });
+    } catch (e) {
+      poseUrlInput.value = 'http://127.0.0.1:5000';
+      setStatus('Using local default.', 'muted');
+    }
+  }
+
+  function savePoseUrl(raw) {
+    const url = normalizePoseUrl(raw);
+    try {
+      chrome.storage.sync.set({ poseApiUrl: url }, () => {
+        setStatus(`Saved: ${url}`, 'ok');
+      });
+    } catch (e) {
+      setStatus(`Failed to save: ${e}`, 'error');
+    }
+  }
+
   function setBadge(badge, active) {
     if (!badge) return;
     badge.textContent = active ? 'Active' : 'Inactive';
@@ -53,4 +100,35 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     }
   });
+
+  // Pose server settings
+  loadPoseUrl();
+
+  if (poseUseLocalBtn) {
+    poseUseLocalBtn.addEventListener('click', () => {
+      if (poseUrlInput) poseUrlInput.value = 'http://127.0.0.1:5000';
+      savePoseUrl('http://127.0.0.1:5000');
+    });
+  }
+
+  if (poseSaveBtn) {
+    poseSaveBtn.addEventListener('click', () => {
+      savePoseUrl(poseUrlInput ? poseUrlInput.value : '');
+    });
+  }
+
+  if (poseTestBtn) {
+    poseTestBtn.addEventListener('click', () => {
+      const url = normalizePoseUrl(poseUrlInput ? poseUrlInput.value : '');
+      setStatus(`Testing: ${url}`, 'muted');
+      chrome.runtime.sendMessage({ type: 'FETCH_POSE', words: 'hello', url }, (res) => {
+        if (!res || !res.ok) {
+          setStatus(`Test failed: ${res?.error || chrome.runtime.lastError?.message || 'unknown error'}`, 'error');
+          return;
+        }
+        const frames = Array.isArray(res.data) ? res.data.length : 0;
+        setStatus(`OK (${frames} frames)`, 'ok');
+      });
+    });
+  }
 });

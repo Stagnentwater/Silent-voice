@@ -9,6 +9,7 @@ from copy import deepcopy
 import google.generativeai as genai
 import dotenv
 import psycopg2
+from psycopg2 import OperationalError
 from flask_cors import CORS
 from pgvector.psycopg2 import register_vector
 from sentence_transformers import SentenceTransformer
@@ -18,14 +19,87 @@ from flask import Flask, Response, request, make_response, jsonify
 dotenv.load_dotenv()
 app = Flask(__name__)
 CORS(app)
-db = psycopg2.connect(
-    database="poses",
-    host="localhost",
-    user="postgres",
-    password=os.getenv("POSTGRES_PASSWORD"),
-    port=5432,
-)
-register_vector(db)
+
+
+def _default_sslmode(host: str) -> str:
+    if host in {"localhost", "127.0.0.1", ""}:
+        return "disable"
+    return "require"
+
+
+def _connect_db():
+    host = os.getenv("DB_HOST", "localhost")
+    port = int(os.getenv("DB_PORT", "5432"))
+    database = os.getenv("DB_NAME", "poses")
+    user = os.getenv("DB_USER", "postgres")
+    explicit_password = os.getenv("DB_PASSWORD")
+    if explicit_password:
+        password = explicit_password
+    else:
+        is_local = host in {"localhost", "127.0.0.1", ""}
+        # Supabase pooler users look like: postgres.<project_ref>
+        looks_like_supabase = ("supabase" in host) or user.startswith("postgres.")
+        if (not is_local) or looks_like_supabase:
+            password = os.getenv("SUPABASE_PASSWORD") or os.getenv("POSTGRES_PASSWORD")
+        else:
+            password = os.getenv("POSTGRES_PASSWORD")
+
+    sslmode = os.getenv("DB_SSLMODE") or _default_sslmode(host)
+
+    conn = psycopg2.connect(
+        database=database,
+        host=host,
+        user=user,
+        password=password,
+        port=port,
+        sslmode=sslmode,
+        connect_timeout=int(os.getenv("DB_CONNECT_TIMEOUT", "10")),
+    )
+    register_vector(conn)
+    return conn
+
+
+db = None
+
+
+def get_db():
+    global db
+    if db is None:
+        db = _connect_db()
+        return db
+    try:
+        # psycopg2 sets .closed to 0 when open
+        if getattr(db, "closed", 1) != 0:
+            db = _connect_db()
+    except Exception:
+        db = _connect_db()
+    return db
+
+
+def _with_db_cursor(fn):
+    """Run `fn(cur)` with a healthy cursor; reconnect once on connection errors."""
+    conn = get_db()
+    try:
+        cur = conn.cursor()
+        try:
+            return fn(cur)
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass
+    except OperationalError:
+        # Reconnect once if Supabase/pooler dropped the connection.
+        global db
+        db = _connect_db()
+        cur = db.cursor()
+        try:
+            return fn(cur)
+        finally:
+            try:
+                cur.close()
+            except Exception:
+                pass
 embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
 # Configure Google Gemini for ASL rephrasing (replace OpenAI)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -49,7 +123,8 @@ if GEMINI_API_KEY:
 
 fingerspelling = {}
 for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
-    file_path = os.path.join("data/alphabets", f"{letter}.json")
+    base_dir = os.path.dirname(__file__)
+    file_path = os.path.join(base_dir, "data", "alphabets", f"{letter}.json")
     with open(file_path, "r") as file:
         fingerspelling[letter] = json.load(file)
 
@@ -150,100 +225,103 @@ def pose():
     t_db_total = 0.0
     t_build_total = 0.0
 
-    cur = db.cursor()
-    for word in words:
-        # Normalize embeddings to make cosine distance meaningful
-        t_e0 = time.perf_counter()
-        embedding = embedding_model.encode(word, normalize_embeddings=True)
-        t_e1 = time.perf_counter()
-        t_embed_total += t_e1 - t_e0
+    def run_query(cur):
+        nonlocal frame_counter, t_embed_total, t_db_total, t_build_total
 
-        t_q0 = time.perf_counter()
-        cur.execute(
-            "SELECT word, poses, (embedding <=> %s) AS cosine_distance FROM signs ORDER BY cosine_distance ASC LIMIT 1",
-            (embedding,),
-        )
-        result = cur.fetchone()
-        t_q1 = time.perf_counter()
-        t_db_total += t_q1 - t_q0
+        for word in words:
+            # Normalize embeddings to make cosine distance meaningful
+            t_e0 = time.perf_counter()
+            embedding = embedding_model.encode(word, normalize_embeddings=True)
+            t_e1 = time.perf_counter()
+            t_embed_total += t_e1 - t_e0
 
-        t_b0 = time.perf_counter()
-        animation = []
+            t_q0 = time.perf_counter()
+            cur.execute(
+                "SELECT word, poses, (embedding <=> %s) AS cosine_distance FROM public.signs ORDER BY cosine_distance ASC LIMIT 1",
+                (embedding,),
+            )
+            result = cur.fetchone()
+            t_q1 = time.perf_counter()
+            t_db_total += t_q1 - t_q0
 
-        # Use cosine distance threshold (lower = more similar). Fallback if too far or missing.
-        distance = float(result[2]) if result and result[2] is not None else None
-        use_fingerspell = True if distance is None else distance > 0.25  # similarity < ~0.75
+            t_b0 = time.perf_counter()
+            animation = []
 
-        if use_fingerspell:
-            # Build frames from cached A–Z without mutating the cache
-            for letter in re.sub(r"[^A-Z]", "", word.upper()):
-                frames = fingerspelling.get(letter)
-                if not frames:
-                    continue
-                letter_frames = deepcopy(frames)
-                for f in letter_frames:
-                    f["word"] = f"fs-{word.upper()}"
-                animation.extend(letter_frames)
-        else:
-            # Also deepcopy DB frames before tagging
-            sign_frames = deepcopy(result[1]) if result and result[1] else []
-            for f in sign_frames:
-                f["word"] = result[0]
-            animation.extend(sign_frames)
+            # Use cosine distance threshold (lower = more similar). Fallback if too far or missing.
+            distance = float(result[2]) if result and result[2] is not None else None
+            use_fingerspell = True if distance is None else distance > 0.25  # similarity < ~0.75
 
-        previous_frame = animations[-1] if animations else None
+            if use_fingerspell:
+                # Build frames from cached A–Z without mutating the cache
+                for letter in re.sub(r"[^A-Z]", "", word.upper()):
+                    frames = fingerspelling.get(letter)
+                    if not frames:
+                        continue
+                    letter_frames = deepcopy(frames)
+                    for f in letter_frames:
+                        f["word"] = f"fs-{word.upper()}"
+                    animation.extend(letter_frames)
+            else:
+                # Also deepcopy DB frames before tagging
+                sign_frames = deepcopy(result[1]) if result and result[1] else []
+                for f in sign_frames:
+                    f["word"] = result[0]
+                animation.extend(sign_frames)
 
-        if previous_frame and animation:
-            next_frame = animation[0]
-            for i in range(5):
-                ratio = i / 5
-                interpolated_frame = {
+            previous_frame = animations[-1] if animations else None
+
+            if previous_frame and animation:
+                next_frame = animation[0]
+                for i in range(5):
+                    ratio = i / 5
+                    interpolated_frame = {
+                        "frame": frame_counter,
+                        "word": previous_frame.get("word", ""),
+                        "pose_landmarks": interpolate_landmarks(
+                            previous_frame.get("pose_landmarks"),
+                            next_frame.get("pose_landmarks"),
+                            ratio,
+                        ),
+                        "left_hand_landmarks": interpolate_landmarks(
+                            previous_frame.get("left_hand_landmarks"),
+                            next_frame.get("left_hand_landmarks"),
+                            ratio,
+                        ),
+                        "right_hand_landmarks": interpolate_landmarks(
+                            previous_frame.get("right_hand_landmarks"),
+                            next_frame.get("right_hand_landmarks"),
+                            ratio,
+                        ),
+                        "face_landmarks": interpolate_landmarks(
+                            previous_frame.get("face_landmarks"),
+                            next_frame.get("face_landmarks"),
+                            ratio,
+                        ),
+                    }
+                    animations.append(interpolated_frame)
+                    frame_counter += 1
+
+            # Normalize and append frames from the selected animation
+            for f in animation:
+                normalized = {
                     "frame": frame_counter,
-                    "word": previous_frame.get("word", ""),
-                    "pose_landmarks": interpolate_landmarks(
-                        previous_frame.get("pose_landmarks"),
-                        next_frame.get("pose_landmarks"),
-                        ratio,
-                    ),
-                    "left_hand_landmarks": interpolate_landmarks(
-                        previous_frame.get("left_hand_landmarks"),
-                        next_frame.get("left_hand_landmarks"),
-                        ratio,
-                    ),
-                    "right_hand_landmarks": interpolate_landmarks(
-                        previous_frame.get("right_hand_landmarks"),
-                        next_frame.get("right_hand_landmarks"),
-                        ratio,
-                    ),
-                    "face_landmarks": interpolate_landmarks(
-                        previous_frame.get("face_landmarks"),
-                        next_frame.get("face_landmarks"),
-                        ratio,
-                    ),
+                    "word": f.get("word", result[0] if result else ""),
+                    "pose_landmarks": f.get("pose_landmarks"),
+                    "left_hand_landmarks": f.get("left_hand_landmarks"),
+                    "right_hand_landmarks": f.get("right_hand_landmarks"),
+                    "face_landmarks": f.get("face_landmarks"),
                 }
-                animations.append(interpolated_frame)
+                animations.append(normalized)
                 frame_counter += 1
 
-        # Normalize and append frames from the selected animation
-        for f in animation:
-            normalized = {
-                "frame": frame_counter,
-                "word": f.get("word", result[0] if result else ""),
-                "pose_landmarks": f.get("pose_landmarks"),
-                "left_hand_landmarks": f.get("left_hand_landmarks"),
-                "right_hand_landmarks": f.get("right_hand_landmarks"),
-                "face_landmarks": f.get("face_landmarks"),
-            }
-            animations.append(normalized)
-            frame_counter += 1
-
-        t_b1 = time.perf_counter()
-        t_build_total += t_b1 - t_b0
+            t_b1 = time.perf_counter()
+            t_build_total += t_b1 - t_b0
 
     try:
-        cur.close()
-    except Exception:
-        pass
+        _with_db_cursor(run_query)
+    except Exception as e:
+        app.logger.exception("DB query failed")
+        return jsonify({"error": "db_query_failed", "message": str(e)}), 500
 
     t_gz0 = time.perf_counter()
     content = gzip.compress(json.dumps(animations).encode("utf8"), 5)
@@ -307,5 +385,8 @@ def pose():
 
 
 if __name__ == "__main__":
-    app.run()
+    # Keep defaults compatible with the extension (127.0.0.1:5000)
+    host = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", "5000"))
+    app.run(host=host, port=port)
 

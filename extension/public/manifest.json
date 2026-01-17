@@ -19,6 +19,7 @@
     "https://*.youtube.com/*",
     "https://*.googlevideo.com/*",
     "https://meet.google.com/*",
+    "https://*.vercel.app/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
   ],

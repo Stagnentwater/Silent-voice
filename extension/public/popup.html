@@ -18,6 +18,11 @@
       .muted { color: #94a3b8; }
       .how { font-size: 12px; color: #334155; margin: 6px 0 0; }
       a { color: #2563eb; text-decoration: none; }
+      .row { display:flex; gap:8px; align-items:center; }
+      .row input { flex:1; padding:6px 8px; border:1px solid #cbd5e1; border-radius:6px; font-size:12px; }
+      .row button { padding:6px 10px; background:#1f2937; color:#fff; border:1px solid #334155; border-radius:6px; cursor:pointer; font-size:12px; }
+      .row button.secondary { background:#fff; color:#1f2937; }
+      .status { font-size:11px; color:#475569; margin-top:6px; min-height:14px; }
     </style>
   </head>
   <body>
@@ -49,6 +54,20 @@
           <span class="badge active">Available</span>
         </h3>
         <p class="desc">Select text on any page, right‑click, and choose <strong>“Show in Sign Language”</strong> to preview it locally.</p>
+      </div>
+
+      <div class="card">
+        <h3>Pose server</h3>
+        <p class="desc">Use local server while developing, and your Vercel URL in production.</p>
+        <div class="row" style="margin-top:8px;">
+          <input id="pose-api-url" placeholder="http://127.0.0.1:5000  or  https://your-app.vercel.app" />
+          <button id="pose-save-btn">Save</button>
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <button class="secondary" id="pose-use-local-btn">Use local</button>
+          <button class="secondary" id="pose-test-btn">Test</button>
+        </div>
+        <div class="status" id="pose-status" aria-live="polite"></div>
       </div>
     </div>
     <div class="note">Tip: After opening a new YouTube video, refresh the page to make sure the sign overlay reconnects.</div>
