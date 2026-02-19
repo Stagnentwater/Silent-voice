@@ -24,13 +24,21 @@ let frames = [];
 let frameIdx = 0;
 let animHandle = null;
 let activePort = null;
+let poseResponseReceivedAtMs = 0;
+let firstMotionLoggedForRequest = false;
 
 let inFlight = false;
 let clearOnFirstChunk = false;
 let receivedAnyChunk = false;
 
-let wordQueue = [];
+let requestQueue = [];
 let lastTokensNorm = [];
+let pendingTokensOrig = [];
+let pendingFlushTimer = null;
+
+const INPUT_BUFFER_FLUSH_MS = 220;
+const INPUT_BUFFER_CHUNK_WORDS = 4;
+const MAX_REQUEST_QUEUE = 60;
 
 function clamp01(v) {
   if (typeof v !== 'number' || Number.isNaN(v)) return 0;
@@ -47,17 +55,7 @@ function drawLandmarks(landmark) {
       point.visibility = 1;
     });
 
-    const filteredPoseLandmarks = landmark.pose_landmarks.filter(
-      (point, index) => ![17, 18, 19, 20, 21, 22].includes(index)
-    );
-
-    const filteredPoseConnections = POSE_CONNECTIONS.filter(
-      (connection) =>
-        ![17, 18, 19, 20, 21, 22].includes(connection[0]) &&
-        ![17, 18, 19, 20, 21, 22].includes(connection[1])
-    );
-
-    drawConnectors(ctx, filteredPoseLandmarks, filteredPoseConnections, {
+    drawConnectors(ctx, landmark.pose_landmarks, POSE_CONNECTIONS, {
       color: '#00FF00',
       lineWidth: 2,
     });
@@ -102,6 +100,17 @@ function animate() {
   const f = frames[frameIdx % frames.length];
   frameIdx += 1;
   drawLandmarks(f);
+
+  if (!firstMotionLoggedForRequest && poseResponseReceivedAtMs > 0) {
+    firstMotionLoggedForRequest = true;
+    const firstMotionDelayMs = performance.now() - poseResponseReceivedAtMs;
+    console.info(
+      '[sv][perf][meet] first-motion delay (response->first-frame):',
+      `${firstMotionDelayMs.toFixed(1)}ms`,
+      { bufferedFrames: frames.length }
+    );
+  }
+
   animHandle = requestAnimationFrame(animate);
 }
 
@@ -182,8 +191,14 @@ function destroyOverlay() {
   inFlight = false;
   clearOnFirstChunk = false;
   receivedAnyChunk = false;
-  wordQueue = [];
+  requestQueue = [];
+  pendingTokensOrig = [];
   lastTokensNorm = [];
+
+  if (pendingFlushTimer) {
+    clearTimeout(pendingFlushTimer);
+    pendingFlushTimer = null;
+  }
 
   if (activePort) {
     try {
@@ -217,34 +232,68 @@ function normalizeToken(token) {
   return (token || '').toLowerCase();
 }
 
-function startsWithTokens(a, b) {
-  if (b.length > a.length) return false;
-  for (let i = 0; i < b.length; i += 1) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
+function longestCommonPrefixLen(a, b) {
+  const len = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < len && a[i] === b[i]) i += 1;
+  return i;
 }
 
 function startNextWord() {
   if (!enabled) return;
   if (inFlight) return;
-  if (!wordQueue.length) return;
-  const next = wordQueue.shift();
+  if (!requestQueue.length) return;
+  const next = requestQueue.shift();
   if (!next) return;
   requestPoses(next);
 }
 
-function enqueueWords(words) {
-  if (!words || !words.length) return;
-  const CAP = 50;
-  for (const w of words) {
-    if (!w) continue;
-    wordQueue.push(w);
-    if (wordQueue.length > CAP) {
-      wordQueue = wordQueue.slice(-Math.floor(CAP / 2));
-    }
+function enqueueRequestText(text) {
+  if (!text) return;
+  requestQueue.push(text);
+  if (requestQueue.length > MAX_REQUEST_QUEUE) {
+    requestQueue = requestQueue.slice(-Math.floor(MAX_REQUEST_QUEUE / 2));
   }
+}
+
+function flushPendingTokens() {
+  if (!pendingTokensOrig.length) return;
+
+  while (pendingTokensOrig.length > 0) {
+    const chunk = pendingTokensOrig.splice(0, INPUT_BUFFER_CHUNK_WORDS);
+    const text = chunk.join(' ').trim();
+    if (text) enqueueRequestText(text);
+  }
+
+  if (statusEl && requestQueue.length) {
+    statusEl.textContent = `Buffered ${requestQueue.length} chunk(s) for translation...`;
+  }
+
   startNextWord();
+}
+
+function schedulePendingFlush() {
+  if (pendingFlushTimer) clearTimeout(pendingFlushTimer);
+  pendingFlushTimer = setTimeout(() => {
+    pendingFlushTimer = null;
+    flushPendingTokens();
+  }, INPUT_BUFFER_FLUSH_MS);
+}
+
+function bufferNewTokens(tokensOrig) {
+  if (!tokensOrig || !tokensOrig.length) return;
+
+  for (const token of tokensOrig) {
+    if (!token) continue;
+    pendingTokensOrig.push(token);
+  }
+
+  if (pendingTokensOrig.length >= INPUT_BUFFER_CHUNK_WORDS) {
+    flushPendingTokens();
+    return;
+  }
+
+  schedulePendingFlush();
 }
 
 function processCaptionIncremental(captionText) {
@@ -255,17 +304,16 @@ function processCaptionIncremental(captionText) {
   const tokensNorm = tokensOrig.map(normalizeToken);
   if (!tokensNorm.length) return;
 
-  let newTokensOrig = [];
-  if (startsWithTokens(tokensNorm, lastTokensNorm)) {
-    newTokensOrig = tokensOrig.slice(lastTokensNorm.length);
-  } else {
-    newTokensOrig = tokensOrig;
-  }
+  const lcp = longestCommonPrefixLen(tokensNorm, lastTokensNorm);
+  const newTokensOrig = tokensOrig.slice(lcp);
 
   lastTokensNorm = tokensNorm;
 
   if (newTokensOrig.length) {
-    enqueueWords(newTokensOrig);
+    if (statusEl) {
+      statusEl.textContent = `Detected ${newTokensOrig.length} new word(s): ${newTokensOrig.join(' ')}`;
+    }
+    bufferNewTokens(newTokensOrig);
   }
 }
 
@@ -435,6 +483,8 @@ function requestPoses(words) {
   inFlight = true;
   clearOnFirstChunk = true;
   receivedAnyChunk = false;
+  poseResponseReceivedAtMs = 0;
+  firstMotionLoggedForRequest = false;
   if (statusEl) statusEl.textContent = `Translating: \"${text}\"`;
 
   const port = chrome.runtime.connect({ name: 'sv-port' });
@@ -443,6 +493,9 @@ function requestPoses(words) {
   port.onMessage.addListener((msg) => {
     if (!msg) return;
     if (msg.type === 'POSE_CHUNK' && Array.isArray(msg.frames)) {
+      if (!poseResponseReceivedAtMs) {
+        poseResponseReceivedAtMs = performance.now();
+      }
       if (clearOnFirstChunk) {
         // Avoid flashing to an empty canvas while waiting for the backend.
         frames = [];

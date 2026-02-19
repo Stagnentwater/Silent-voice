@@ -4,7 +4,9 @@ import json
 import gzip
 import time
 import uuid
+import threading
 from copy import deepcopy
+from collections import deque
 
 import google.generativeai as genai
 import dotenv
@@ -19,6 +21,162 @@ from flask import Flask, Response, request, make_response, jsonify
 dotenv.load_dotenv()
 app = Flask(__name__)
 CORS(app)
+
+
+class RollingWindowStats:
+    def __init__(self, size: int = 200):
+        self.size = max(20, size)
+        self._lock = threading.Lock()
+        self.total_ms = deque(maxlen=self.size)
+        self.db_ms = deque(maxlen=self.size)
+        self.serialization_ms = deque(maxlen=self.size)
+
+    @staticmethod
+    def _percentile(values, p):
+        if not values:
+            return None
+        ordered = sorted(values)
+        if len(ordered) == 1:
+            return float(ordered[0])
+        rank = int(round((p / 100.0) * (len(ordered) - 1)))
+        rank = max(0, min(rank, len(ordered) - 1))
+        return float(ordered[rank])
+
+    def add(self, total_ms: float, db_ms: float, serialization_ms: float):
+        with self._lock:
+            self.total_ms.append(total_ms)
+            self.db_ms.append(db_ms)
+            self.serialization_ms.append(serialization_ms)
+
+    def snapshot(self):
+        with self._lock:
+            total = list(self.total_ms)
+            db = list(self.db_ms)
+            serialization = list(self.serialization_ms)
+
+        return {
+            "count": len(total),
+            "total_p50_ms": self._percentile(total, 50),
+            "total_p95_ms": self._percentile(total, 95),
+            "db_p50_ms": self._percentile(db, 50),
+            "db_p95_ms": self._percentile(db, 95),
+            "serialization_p50_ms": self._percentile(serialization, 50),
+            "serialization_p95_ms": self._percentile(serialization, 95),
+        }
+
+
+rolling_stats = RollingWindowStats(int(os.getenv("SV_STATS_WINDOW", "200")))
+
+
+def _new_request_id():
+    return uuid.uuid4().hex[:12]
+
+
+def _json_error(error_code: str, message: str, status: int, request_id: str):
+    return (
+        jsonify({"error": error_code, "message": message, "request_id": request_id}),
+        status,
+    )
+
+
+def _normalize_sentence_tokens(sentence: str):
+    cleaned = (sentence or "").lower().strip()
+    cleaned = re.sub(r"\buh\b", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned.split() if cleaned else []
+
+
+def _lookup_best_sign(cur, token: str):
+    token_lc = token.lower()
+    cur.execute(
+        "SELECT id, word FROM public.signs WHERE lower(word) = %s LIMIT 1",
+        (token_lc,),
+    )
+    exact_row = cur.fetchone()
+    if exact_row:
+        return {
+            "sign_id": str(exact_row[0]),
+            "word": exact_row[1],
+            "match": "exact_word",
+        }
+
+    embedding = embedding_model.encode(token, normalize_embeddings=True)
+    cur.execute(
+        "SELECT id, word FROM public.signs ORDER BY embedding <=> %s ASC LIMIT 1",
+        (embedding,),
+    )
+    row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "sign_id": str(row[0]),
+        "word": row[1],
+        "match": "vector_nn",
+    }
+
+
+def _ensure_light_indexes(conn):
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_signs_word_lower ON public.signs (lower(word))"
+        )
+        cur.execute(
+            "SELECT to_regclass('public.idx_signs_word_lower') IS NOT NULL AS word_idx_exists, EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.signs'::regclass AND contype='p') AS id_pk_exists"
+        )
+        status = cur.fetchone()
+        conn.commit()
+        app.logger.info(
+            "[db/index] word_idx_exists=%s id_pk_exists=%s",
+            bool(status[0]) if status else False,
+            bool(status[1]) if status else False,
+        )
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        try:
+            cur.close()
+        except Exception:
+            pass
+
+
+def _has_frame_count_column(cur):
+    cur.execute(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='signs' AND column_name='frame_count')"
+    )
+    row = cur.fetchone()
+    return bool(row[0]) if row else False
+
+
+def _build_json_response(payload: dict, request_id: str, total_ms: float):
+    t_ser0 = time.perf_counter()
+    payload_json = json.dumps(payload)
+    payload_bytes = payload_json.encode("utf8")
+    t_ser1 = time.perf_counter()
+    serialization_ms = (t_ser1 - t_ser0) * 1000.0
+
+    response = make_response(payload_json)
+    response.headers["Content-Type"] = "application/json"
+    response.headers["Content-length"] = str(len(payload_bytes))
+    response.headers["X-Request-Id"] = request_id
+    response.headers["X-Response-Time-Ms"] = f"{total_ms:.1f}"
+    response.headers["X-Response-Size-Bytes"] = str(len(payload_bytes))
+    return response, serialization_ms, len(payload_bytes)
+
+
+def _log_route_timing(route_name: str, request_id: str, total_ms: float, db_ms: float, serialization_ms: float, payload_bytes: int, extra=None):
+    details = extra or {}
+    app.logger.info(
+        "[%s] id=%s total=%.1fms db=%.1fms serialize=%.1fms payload=%dB %s",
+        route_name,
+        request_id,
+        total_ms,
+        db_ms,
+        serialization_ms,
+        payload_bytes,
+        " ".join(f"{k}={v}" for k, v in details.items()),
+    )
 
 
 def _default_sslmode(host: str) -> str:
@@ -56,6 +214,7 @@ def _connect_db():
         connect_timeout=int(os.getenv("DB_CONNECT_TIMEOUT", "10")),
     )
     register_vector(conn)
+    _ensure_light_indexes(conn)
     return conn
 
 
@@ -165,7 +324,7 @@ def add_cors_pna_headers(response):
     # Allow browser clients (extension) to read timing headers.
     response.headers.setdefault(
         "Access-Control-Expose-Headers",
-        "Server-Timing, X-Response-Time-Ms, X-Request-Id",
+        "Server-Timing, X-Response-Time-Ms, X-Request-Id, X-Response-Size-Bytes, X-Response-Compressed-Bytes",
     )
     # Chrome PNA requirement when calling 127.0.0.1 from a public context
     response.headers.setdefault("Access-Control-Allow-Private-Network", "true")
@@ -323,8 +482,13 @@ def pose():
         app.logger.exception("DB query failed")
         return jsonify({"error": "db_query_failed", "message": str(e)}), 500
 
+    t_ser0 = time.perf_counter()
+    payload_json = json.dumps(animations)
+    payload_bytes = payload_json.encode("utf8")
+    t_ser1 = time.perf_counter()
+
     t_gz0 = time.perf_counter()
-    content = gzip.compress(json.dumps(animations).encode("utf8"), 5)
+    content = gzip.compress(payload_bytes, 5)
     t_gz1 = time.perf_counter()
 
     t1 = time.perf_counter()
@@ -333,7 +497,13 @@ def pose():
     embed_ms = t_embed_total * 1000.0
     db_ms = t_db_total * 1000.0
     build_ms = t_build_total * 1000.0
+    serialization_ms = (t_ser1 - t_ser0) * 1000.0
     gzip_ms = (t_gz1 - t_gz0) * 1000.0
+    payload_size_bytes = len(payload_bytes)
+    compressed_size_bytes = len(content)
+
+    rolling_stats.add(total_ms, db_ms, serialization_ms)
+    stats_snapshot = rolling_stats.snapshot()
 
     gem_ms = None
     try:
@@ -348,6 +518,8 @@ def pose():
 
     response.headers["X-Request-Id"] = request_id
     response.headers["X-Response-Time-Ms"] = f"{total_ms:.1f}"
+    response.headers["X-Response-Size-Bytes"] = str(payload_size_bytes)
+    response.headers["X-Response-Compressed-Bytes"] = str(compressed_size_bytes)
     server_timing_parts = [
         f"total;dur={total_ms:.1f}",
         f"parse;dur={parse_ms:.1f}",
@@ -359,6 +531,7 @@ def pose():
             f"embed;dur={embed_ms:.1f}",
             f"db;dur={db_ms:.1f}",
             f"build;dur={build_ms:.1f}",
+            f"serialize;dur={serialization_ms:.1f}",
             f"gzip;dur={gzip_ms:.1f}",
         ]
     )
@@ -366,7 +539,7 @@ def pose():
 
     if log_timings:
         app.logger.info(
-            "[pose] id=%s words=%d frames=%d total=%.1fms parse=%.1fms gemini=%sms embed=%.1fms db=%.1fms build=%.1fms gzip=%.1fms",
+            "[pose] id=%s words=%d frames=%d total=%.1fms parse=%.1fms gemini=%sms embed=%.1fms db=%.1fms build=%.1fms serialize=%.1fms gzip=%.1fms payload=%dB compressed=%dB rolling(count=%d,total_p50=%.1f,total_p95=%.1f,db_p50=%.1f,db_p95=%.1f,ser_p50=%.1f,ser_p95=%.1f)",
             request_id,
             len(words),
             len(animations),
@@ -376,9 +549,179 @@ def pose():
             embed_ms,
             db_ms,
             build_ms,
+            serialization_ms,
             gzip_ms,
+            payload_size_bytes,
+            compressed_size_bytes,
+            stats_snapshot["count"],
+            stats_snapshot["total_p50_ms"] or 0.0,
+            stats_snapshot["total_p95_ms"] or 0.0,
+            stats_snapshot["db_p50_ms"] or 0.0,
+            stats_snapshot["db_p95_ms"] or 0.0,
+            stats_snapshot["serialization_p50_ms"] or 0.0,
+            stats_snapshot["serialization_p95_ms"] or 0.0,
         )
 
+    return response
+
+
+@app.route("/pose/sentence", methods=["POST"])
+def pose_sentence():
+    request_id = _new_request_id()
+    t0 = time.perf_counter()
+    db_ms = 0.0
+
+    data = request.get_json(silent=True) or {}
+    sentence = data.get("sentence", "")
+    tokens = _normalize_sentence_tokens(sentence)
+    if not tokens:
+        return _json_error(
+            "invalid_request",
+            "`sentence` is required and must contain at least one token.",
+            400,
+            request_id,
+        )
+
+    def run_query(cur):
+        nonlocal db_ms
+        signs = []
+        exact_matches = 0
+        vector_matches = 0
+        for token in tokens:
+            t_q0 = time.perf_counter()
+            sign = _lookup_best_sign(cur, token)
+            t_q1 = time.perf_counter()
+            db_ms += (t_q1 - t_q0) * 1000.0
+            if sign is None:
+                signs.append({"sign_id": None, "word": token})
+            else:
+                if sign.get("match") == "exact_word":
+                    exact_matches += 1
+                elif sign.get("match") == "vector_nn":
+                    vector_matches += 1
+                signs.append({"sign_id": sign["sign_id"], "word": sign["word"]})
+        return signs, exact_matches, vector_matches
+
+    try:
+        signs, exact_matches, vector_matches = _with_db_cursor(run_query)
+    except Exception as e:
+        app.logger.exception("/pose/sentence db query failed")
+        return _json_error("db_query_failed", str(e), 500, request_id)
+
+    total_ms = (time.perf_counter() - t0) * 1000.0
+    payload = {
+        "signs": signs,
+        "request_id": request_id,
+        "timings": {
+            "total_ms": round(total_ms, 1),
+            "db_ms": round(db_ms, 1),
+        },
+    }
+    response, serialization_ms, payload_bytes = _build_json_response(
+        payload, request_id, total_ms
+    )
+    response.headers["Server-Timing"] = (
+        f"total;dur={total_ms:.1f}, db;dur={db_ms:.1f}, serialize;dur={serialization_ms:.1f}"
+    )
+    _log_route_timing(
+        "pose/sentence",
+        request_id,
+        total_ms,
+        db_ms,
+        serialization_ms,
+        payload_bytes,
+        {
+            "tokens": len(tokens),
+            "signs": len(signs),
+            "query_shape": "SELECT id, word",
+            "exact_matches": exact_matches,
+            "vector_matches": vector_matches,
+        },
+    )
+    return response
+
+
+@app.route("/pose/word/<sign_id>", methods=["GET"])
+def pose_word(sign_id):
+    request_id = _new_request_id()
+    t0 = time.perf_counter()
+    db_ms = 0.0
+
+    if not str(sign_id).isdigit():
+        return _json_error(
+            "invalid_sign_id",
+            "`sign_id` must be a numeric string.",
+            400,
+            request_id,
+        )
+
+    numeric_sign_id = int(sign_id)
+
+    def run_query(cur):
+        nonlocal db_ms
+        has_frame_count = _has_frame_count_column(cur)
+        t_q0 = time.perf_counter()
+        if has_frame_count:
+            cur.execute(
+                "SELECT id, word, frame_count FROM public.signs WHERE id = %s",
+                (numeric_sign_id,),
+            )
+        else:
+            cur.execute(
+                "SELECT id, word, NULL::integer AS frame_count FROM public.signs WHERE id = %s",
+                (numeric_sign_id,),
+            )
+        row = cur.fetchone()
+        t_q1 = time.perf_counter()
+        db_ms += (t_q1 - t_q0) * 1000.0
+        return row, has_frame_count
+
+    try:
+        row, has_frame_count = _with_db_cursor(run_query)
+    except Exception as e:
+        app.logger.exception("/pose/word db query failed")
+        return _json_error("db_query_failed", str(e), 500, request_id)
+
+    if not row:
+        return _json_error(
+            "not_found",
+            f"No sign found for sign_id={sign_id}.",
+            404,
+            request_id,
+        )
+
+    total_ms = (time.perf_counter() - t0) * 1000.0
+    payload = {
+        "sign_id": str(row[0]),
+        "word": row[1],
+        "frame_count": int(row[2]) if row[2] is not None else None,
+        "has_pose": True,
+        "request_id": request_id,
+        "timings": {
+            "total_ms": round(total_ms, 1),
+            "db_ms": round(db_ms, 1),
+        },
+    }
+    response, serialization_ms, payload_bytes = _build_json_response(
+        payload, request_id, total_ms
+    )
+    response.headers["Server-Timing"] = (
+        f"total;dur={total_ms:.1f}, db;dur={db_ms:.1f}, serialize;dur={serialization_ms:.1f}"
+    )
+    _log_route_timing(
+        "pose/word",
+        request_id,
+        total_ms,
+        db_ms,
+        serialization_ms,
+        payload_bytes,
+        {
+            "sign_id": sign_id,
+            "frame_count": payload["frame_count"],
+            "frame_count_source": "column" if has_frame_count else "unavailable",
+            "query_shape": "SELECT id, word, frame_count",
+        },
+    )
     return response
 
 

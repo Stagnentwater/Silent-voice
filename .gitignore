@@ -5,7 +5,7 @@ desktop.ini
 .idea/
 .vscode/
 *.code-workspace
-
+node_modules
 # Python
 __pycache__/
 *.py[cod]

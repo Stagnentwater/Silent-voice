@@ -35,6 +35,10 @@ function fetchPose(words, url) {
   });
 }
 
+function isFingerspellFrame(frame) {
+  return typeof frame?.word === 'string' && frame.word.startsWith('fs-');
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || message.type !== 'FETCH_POSE') return;
 
@@ -183,7 +187,10 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
         let done = false;
         let started = false;
         let i = 0;
-        const fps = 30; // best-effort playback
+        const defaultFps = 20;
+        const fingerspellFps = 30;
+        let responseReceivedAtMs = 0;
+        let firstFrameLogged = false;
 
         function tick() {
           if (i < frames.length) {
@@ -194,9 +201,20 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
             drawPoints(ctx, f.face_landmarks, '#22d3ee');
             drawPoints(ctx, f.right_hand_landmarks, '#facc15');
             drawPoints(ctx, f.left_hand_landmarks, '#f472b6');
+            if (!firstFrameLogged && responseReceivedAtMs > 0) {
+              firstFrameLogged = true;
+              const firstMotionDelayMs = performance.now() - responseReceivedAtMs;
+              console.info(
+                '[sv][perf][context] first-motion delay (response->first-frame):',
+                `${firstMotionDelayMs.toFixed(1)}ms`,
+                { bufferedFrames: frames.length }
+              );
+            }
             i += 1;
           }
           if (!done || i < frames.length) {
+            const nextFrame = frames[i] || null;
+            const fps = isFingerspellFrame(nextFrame) ? fingerspellFps : defaultFps;
             setTimeout(() => requestAnimationFrame(tick), 1000 / fps);
           }
         }
@@ -208,6 +226,9 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
             return;
           }
           if (msg.type === 'POSE_CHUNK' && Array.isArray(msg.frames)) {
+            if (!responseReceivedAtMs) {
+              responseReceivedAtMs = performance.now();
+            }
             frames.push(...msg.frames);
             if (!started) {
               started = true;
