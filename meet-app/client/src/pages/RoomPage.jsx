@@ -6,8 +6,8 @@ import { useSpeechToPose } from '../hooks/useSpeechToPose.js';
 import { createPoseClient } from '../services/poseApi.js';
 import { createPosePacket } from '../services/poseChannel.js';
 import { AvatarCanvas } from '../components/AvatarCanvas.jsx';
+import { SIGNALING_URL } from '../config/network.js';
 
-const SIGNALING_URL = import.meta.env.VITE_SIGNALING_URL || 'ws://localhost:8080';
 const POSE_SERVER_URL = import.meta.env.VITE_POSE_SERVER_URL || 'http://localhost:5000';
 
 // StreamView — when showSpeakingBorder=true, analyses audio and writes
