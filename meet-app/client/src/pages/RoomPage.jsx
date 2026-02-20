@@ -6,9 +6,7 @@ import { useSpeechToPose } from '../hooks/useSpeechToPose.js';
 import { createPoseClient } from '../services/poseApi.js';
 import { createPosePacket } from '../services/poseChannel.js';
 import { AvatarCanvas } from '../components/AvatarCanvas.jsx';
-import { SIGNALING_URL } from '../config/network.js';
-
-const POSE_SERVER_URL = import.meta.env.VITE_POSE_SERVER_URL || 'http://localhost:5000';
+import { POSE_SERVER_URL, SIGNALING_URL } from '../config/network.js';
 
 // StreamView — when showSpeakingBorder=true, analyses audio and writes
 // --spk-rms (0–1) onto the wrapper div so CSS can grow the white border.
