@@ -159,19 +159,28 @@ export function RoomPage() {
     setError('');
     if (!/^[A-Z0-9]{6}$/.test(normalizedRoomCode)) { setError('Invalid room code.'); return; }
     setConnecting(true);
+    const streamForJoin = previewStream || null;
     try {
       const roomMeta = await joinRoomApi({ roomCode: normalizedRoomCode });
       const resolvedUserId = String(user?.id || '').trim();
       if (!resolvedUserId) throw new Error('Unable to identify current user');
+
+      if (streamForJoin) {
+        setPreviewStream(null);
+      }
+
       await joinRealtimeRoom(normalizedRoomCode, {
         userId: resolvedUserId,
         username: user?.username,
         hostId: String(roomMeta?.hostId || '').trim() || resolvedUserId,
         audioEnabled: !isMuted,
-        videoEnabled: !isVideoOff
+        videoEnabled: !isVideoOff,
+        initialStream: streamForJoin || undefined
       });
-      if (previewStream) { previewStream.getTracks().forEach((t) => t.stop()); setPreviewStream(null); }
     } catch (err) {
+      if (streamForJoin) {
+        setPreviewStream(streamForJoin);
+      }
       setError(err.message || 'Unable to join meeting');
     } finally {
       setConnecting(false);
