@@ -165,6 +165,24 @@ export function RoomPage() {
   const hasJoined = Boolean(joinedRoom);
 
   useEffect(() => {
+    const onError = (event) => {
+      console.error('[GlobalError]', event?.message, event?.filename, event?.lineno, event?.error);
+    };
+
+    const onUnhandledRejection = (event) => {
+      console.error('[UnhandledRejection]', event?.reason);
+    };
+
+    window.addEventListener('error', onError);
+    window.addEventListener('unhandledrejection', onUnhandledRejection);
+
+    return () => {
+      window.removeEventListener('error', onError);
+      window.removeEventListener('unhandledrejection', onUnhandledRejection);
+    };
+  }, []);
+
+  useEffect(() => {
     if (hasJoined) return undefined;
     let active = true;
     async function loadPreview() {

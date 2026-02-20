@@ -1,7 +1,8 @@
 const fs = require("fs/promises");
 const path = require("path");
 
-const USERS_FILE = path.join(__dirname, "users.json");
+const SOURCE_USERS_FILE = path.join(__dirname, "users.json");
+const USERS_FILE = process.env.USERS_FILE || (process.env.VERCEL ? "/tmp/signmeet-users.json" : SOURCE_USERS_FILE);
 
 let writeQueue = Promise.resolve();
 
@@ -9,6 +10,18 @@ async function ensureUsersFile() {
   try {
     await fs.access(USERS_FILE);
   } catch {
+    if (USERS_FILE !== SOURCE_USERS_FILE) {
+      try {
+        const seedRaw = await fs.readFile(SOURCE_USERS_FILE, "utf8");
+        const parsed = JSON.parse(seedRaw || "[]");
+        const seed = Array.isArray(parsed) ? parsed : [];
+        await fs.writeFile(USERS_FILE, JSON.stringify(seed, null, 2), "utf8");
+        return;
+      } catch {
+        // fall through to initialize an empty file
+      }
+    }
+
     await fs.writeFile(USERS_FILE, "[]", "utf8");
   }
 }

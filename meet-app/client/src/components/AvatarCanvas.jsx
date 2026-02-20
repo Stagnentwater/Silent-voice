@@ -28,6 +28,13 @@ export function AvatarCanvas({ latestPosePacket, displayText = '', compact = fal
     if (!latestPosePacket || !rendererRef.current) {
       return;
     }
+    console.log('[AvatarCanvas] queueing pose packet for render', {
+      text: latestPosePacket?.text || '',
+      speakerId: latestPosePacket?.speakerId || '',
+      poseIdsCount: Array.isArray(latestPosePacket?.poseIds) ? latestPosePacket.poseIds.length : 0,
+      poseFramesCount: Array.isArray(latestPosePacket?.poseFrames) ? latestPosePacket.poseFrames.length : 0,
+      timingsCount: Array.isArray(latestPosePacket?.timings) ? latestPosePacket.timings.length : 0
+    });
     rendererRef.current.queuePoseSequence(latestPosePacket);
   }, [latestPosePacket]);
 

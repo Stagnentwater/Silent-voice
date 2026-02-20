@@ -44,9 +44,43 @@ export function useSpeechToPose({ poseClient, onPoseReady, speakerId }) {
           continue;
         }
 
+        let response = null;
+
         try {
-          const response = await poseClient.fetchPose(chunkText);
-          if (!result) return;
+          console.log('[SpeechToPose] sending chunk to pose server', {
+            text: chunkText,
+            speakerId,
+            queuedRemaining: pendingChunksRef.current.length
+          });
+
+          response = await poseClient.fetchPose(chunkText);
+          console.log('[SpeechToPose] received pose response', {
+            text: chunkText,
+            speakerId,
+            hasResponse: Boolean(response),
+            poseIdsCount: Array.isArray(response?.poseIds) ? response.poseIds.length : 0,
+            poseFramesCount: Array.isArray(response?.poseFrames) ? response.poseFrames.length : 0,
+            timingsCount: Array.isArray(response?.timings) ? response.timings.length : 0
+          });
+
+          if (!response) {
+            continue;
+          }
+
+        } catch (error) {
+          if (error?.name === 'AbortError') {
+            return; // ignore aborts triggered by stop/timeout
+          }
+
+          console.error('[SpeechToPose] fetchPose failed', error);
+          const message = error?.message === 'Pose request timed out'
+            ? 'Pose request timed out; please try again.'
+            : (error?.message || 'Pose lookup failed');
+          setLastError(message);
+          continue;
+        }
+
+        try {
           onPoseReady({
             text: chunkText,
             poseIds: response.poseIds,
@@ -54,14 +88,14 @@ export function useSpeechToPose({ poseClient, onPoseReady, speakerId }) {
             timings: response.timings,
             speakerId
           });
+
+          console.log('[SpeechToPose] onPoseReady completed', {
+            text: chunkText,
+            speakerId
+          });
         } catch (error) {
-          if (error?.name === 'AbortError') {
-            return; // ignore aborts triggered by stop/timeout
-          }
-          const message = error?.message === 'Pose request timed out'
-            ? 'Pose request timed out; please try again.'
-            : (error?.message || 'Pose lookup failed');
-          setLastError(message);
+          console.error('[SpeechToPose] onPoseReady/render failed', error);
+          setLastError(error?.message || 'Render pipeline failed');
         }
       }
     } finally {

@@ -165,6 +165,8 @@ export class PoseRenderer2D {
     this.running = false;
     this.lastRenderAt = 0;
     this.currentPose = buildPoseFromId(0);
+    this.pendingRenderLog = false;
+    this.sequenceMeta = null;
 
     this.resizeCanvas();
   }
@@ -224,6 +226,13 @@ export class PoseRenderer2D {
         timing
       };
     });
+
+    this.pendingRenderLog = true;
+    this.sequenceMeta = {
+      text: sequencePayload?.text || '',
+      speakerId: sequencePayload?.speakerId || '',
+      frames: source.length
+    };
 
     this.sequenceStart = performance.now();
   }
@@ -334,6 +343,17 @@ export class PoseRenderer2D {
     const state = this.getInterpolatedPose(now);
     this.currentPose = state.pose;
     this.drawPose(state.rawFrame);
+
+    if (this.pendingRenderLog) {
+      console.log('[AvatarCanvas] rendered pose frame on canvas', {
+        text: this.sequenceMeta?.text || '',
+        speakerId: this.sequenceMeta?.speakerId || '',
+        frames: this.sequenceMeta?.frames || 0,
+        hasRawFrame: Boolean(state.rawFrame)
+      });
+      this.pendingRenderLog = false;
+    }
+
     this.frameHandle = requestAnimationFrame(this.renderFrame);
   };
 

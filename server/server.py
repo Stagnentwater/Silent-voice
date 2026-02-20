@@ -441,7 +441,7 @@ def pose():
                 # Also deepcopy DB frames before tagging
                 sign_frames = deepcopy(result[1]) if result and result[1] else []
                 for f in sign_frames:
-                    f["word"] = result[0]
+                    f["word"] = result[0] if result else word
                 animation.extend(sign_frames)
 
             previous_frame = animations[-1] if animations else None
@@ -481,7 +481,7 @@ def pose():
             for f in animation:
                 normalized = {
                     "frame": frame_counter,
-                    "word": f.get("word", result[0] if result else ""),
+                    "word": f.get("word", result[0] if result and result[0] else word),
                     "pose_landmarks": f.get("pose_landmarks"),
                     "left_hand_landmarks": f.get("left_hand_landmarks"),
                     "right_hand_landmarks": f.get("right_hand_landmarks"),
@@ -497,6 +497,7 @@ def pose():
         _with_db_cursor(run_query)
     except Exception as e:
         app.logger.exception("DB query failed")
+        app.logger.error(f"Query error details: {e}", exc_info=True)
         return jsonify({"error": "db_query_failed", "message": str(e)}), 500
 
     t_ser0 = time.perf_counter()
