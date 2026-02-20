@@ -529,7 +529,12 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
             queuePendingCandidate(fromPeerId, candidate);
           }
         }
-      } catch {
+      } catch (error) {
+        console.error('[WebRTC] signal handling failed', {
+          fromPeerId,
+          signalType: signal?.type,
+          error
+        });
         // Avoid tearing down immediately for transient signaling/ICE ordering races.
       }
     });

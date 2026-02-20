@@ -428,7 +428,7 @@ export function RoomPage() {
     ? effectiveSpeakerId === user?.id ? user?.username || 'You' : speakerLabel
     : user?.username || 'You';
 
-  const nonSpeakerTiles = [
+  const participantTiles = [
     {
       key: `self-${user?.id || 'me'}`,
       userId: user?.id,
@@ -450,7 +450,7 @@ export function RoomPage() {
         isSpeaker: Boolean(participant?.userId && effectiveSpeakerId && participant.userId === effectiveSpeakerId)
       };
     })
-  ].filter((tile) => !(tile.isSpeaker && primarySpeakerStream));
+  ];
 
   function toggleSpeakerMenu(tileKey) {
     setSpeakerMenuFor((current) => (current === tileKey ? '' : tileKey));
@@ -491,7 +491,7 @@ export function RoomPage() {
                   <button type="button" onClick={() => handleKeepSpeaker(effectiveSpeakerId)} disabled={!effectiveSpeakerId || speakerId === effectiveSpeakerId}>Keep as speaker</button>
                 </div>
               ) : null}
-              <StreamView stream={featuredSpeakerStream} muted={effectiveSpeakerId === user?.id || !effectiveSpeakerId} showSpeakingBorder />
+              <StreamView stream={featuredSpeakerStream} muted={featuredSpeakerStream === localStream} showSpeakingBorder />
             </div>
             <div className="room-live-tile-footer">
               <span className="room-live-tile-name">{featuredSpeakerName}</span>
@@ -514,9 +514,9 @@ export function RoomPage() {
         </div>
 
         {/* Participant strip */}
-        {nonSpeakerTiles.length ? (
+        {participantTiles.length ? (
           <div className="room-live-grid">
-            {nonSpeakerTiles.map((tile) => (
+            {participantTiles.map((tile) => (
               <article key={tile.key} className="room-live-tile">
                 <div className="room-live-media-wrap">
                   <button type="button" className="room-live-more" onClick={() => toggleSpeakerMenu(tile.key)} disabled={!canAssignSpeaker} aria-label="Speaker options">⋮</button>
