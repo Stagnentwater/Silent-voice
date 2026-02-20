@@ -550,20 +550,25 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
     setConnectionState('connecting');
 
     let stream = null;
-    const supportsGetUserMedia =
-      typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getUserMedia);
 
-    if (supportsGetUserMedia) {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: true
-        });
-      } catch {
+    if (options?.initialStream instanceof MediaStream) {
+      stream = options.initialStream;
+    } else {
+      const supportsGetUserMedia =
+        typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getUserMedia);
+
+      if (supportsGetUserMedia) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: true
+          });
+        } catch {
+          stream = new MediaStream();
+        }
+      } else {
         stream = new MediaStream();
       }
-    } else {
-      stream = new MediaStream();
     }
 
     const audioEnabled = options?.audioEnabled ?? true;
