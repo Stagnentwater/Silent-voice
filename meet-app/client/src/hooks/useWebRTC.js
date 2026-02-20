@@ -295,6 +295,15 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
   }, [attachDataChannel, cleanupPeer, clearFailedCleanupTimer, iceServers, upsertRemoteStreamTracks]);
 
   const connectToPeer = useCallback(async (targetPeerId) => {
+    if (!targetPeerId || targetPeerId === peerIdRef.current) {
+      return;
+    }
+
+    const shouldInitiate = String(peerIdRef.current || '') < String(targetPeerId || '');
+    if (!shouldInitiate) {
+      return;
+    }
+
     const peerConnection = createPeerConnection(targetPeerId, true);
     if (peerConnection.signalingState !== 'stable') {
       return;
@@ -412,7 +421,7 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
         }
 
         connectToPeer(targetPeerId).catch(() => {
-          cleanupPeer(targetPeerId);
+          // Avoid immediate cleanup on transient offer creation races.
         });
       });
     });
@@ -436,7 +445,7 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       }
 
       connectToPeer(resolvedPeerId).catch(() => {
-        cleanupPeer(resolvedPeerId);
+        // Avoid immediate cleanup on transient offer creation races.
       });
     });
 
