@@ -186,17 +186,18 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
 
     const peerConnection = new RTCPeerConnection({ iceServers });
 
-    try {
-      peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
-      peerConnection.addTransceiver('video', { direction: 'sendrecv' });
-    } catch {
-      // Ignore transceiver setup failures for older browser implementations.
-    }
-
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => {
+    const localTracks = localStreamRef.current?.getTracks?.() || [];
+    if (localTracks.length > 0) {
+      localTracks.forEach((track) => {
         peerConnection.addTrack(track, localStreamRef.current);
       });
+    } else {
+      try {
+        peerConnection.addTransceiver('audio', { direction: 'recvonly' });
+        peerConnection.addTransceiver('video', { direction: 'recvonly' });
+      } catch {
+        // Ignore transceiver setup failures for older browser implementations.
+      }
     }
 
     peerConnection.onicecandidate = (event) => {
@@ -516,7 +517,7 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
           }
         }
       } catch {
-        cleanupPeer(fromPeerId);
+        // Avoid tearing down immediately for transient signaling/ICE ordering races.
       }
     });
 
