@@ -2,7 +2,7 @@ const http = require('http');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 
-const PORT = Number(process.env.SIGNALING_PORT || 8080);
+const PORT = Number(process.env.PORT || process.env.SIGNALING_PORT || 8080);
 const HOST = process.env.SIGNALING_HOST || '0.0.0.0';
 const rooms = new Map();
 

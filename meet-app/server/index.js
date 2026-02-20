@@ -8,7 +8,29 @@ const roomRoutes = require("./routes/roomRoutes");
 const app = express();
 const port = Number(process.env.PORT || 3001);
 
-app.use(cors());
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      if (allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error("Not allowed by CORS"));
+    },
+    credentials: true
+  })
+);
 app.use(express.json());
 
 app.get("/health", (req, res) => {
@@ -24,6 +46,10 @@ app.use((err, req, res, next) => {
   res.status(status).json({ error: message });
 });
 
-app.listen(port, () => {
-  console.log(`Auth server listening on port ${port}`);
-});
+module.exports = app;
+
+if (require.main === module) {
+  app.listen(port, "0.0.0.0", () => {
+    console.log(`Auth server listening on http://0.0.0.0:${port}`);
+  });
+}
