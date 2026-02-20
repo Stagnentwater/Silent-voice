@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useWebRTC } from '../hooks/useWebRTC.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { useSpeechToPose } from '../hooks/useSpeechToPose.js';
+import { useSignToSpeech } from '../hooks/useSignToSpeech.js';
 import { createPoseClient } from '../services/poseApi.js';
 import { createPosePacket } from '../services/poseChannel.js';
 import { AvatarCanvas } from '../components/AvatarCanvas.jsx';
@@ -142,7 +143,10 @@ export function RoomPage() {
     sendPosePacket
   } = useWebRTC({
     signalingUrl: SIGNALING_URL,
-    onPosePacket: (packet) => setLatestPosePacket(packet)
+    onPosePacket: (packet) => {
+      if (packet?.type === 'sign-speech') return;
+      setLatestPosePacket(packet);
+    }
   });
 
   const normalizeId = (value) => String(value ?? '').trim();
@@ -152,6 +156,12 @@ export function RoomPage() {
 
   const effectiveSpeakerId = currentSpeakerId || currentUserId || null;
   const isCurrentSpeaker = Boolean(currentUserId && effectiveSpeakerId && currentUserId === effectiveSpeakerId);
+  const signToSpeech = useSignToSpeech({
+    localStream,
+    active: isCurrentSpeaker,
+    onWord: (word) => sendPosePacket({ type: 'sign-speech', word, speakerId: currentUserId }),
+  });
+
   const speech = useSpeechToPose({
     poseClient,
     speakerId: user?.id,
@@ -187,6 +197,7 @@ export function RoomPage() {
 
   function handleLeaveMeeting() {
     speech.stop();
+    signToSpeech.stop();
     leaveRoom();
     navigate(`/room/${normalizedRoomCode}`, { replace: true });
   }
@@ -334,6 +345,7 @@ export function RoomPage() {
       const activeStream = hasJoined ? localStream : previewStream;
       if (activeStream) activeStream.getAudioTracks().forEach((t) => { t.enabled = !nextMuted; });
       if (nextMuted && speech.listening) { speech.stop(); setLatestInterim(''); }
+      if (nextMuted && signToSpeech.listening) signToSpeech.stop();
       return nextMuted;
     });
   }
@@ -355,16 +367,29 @@ export function RoomPage() {
   function handleStartSpeech() {
     if (isMuted) { setSpeechError('Unmute to start speech-to-sign.'); return; }
     if (!isCurrentSpeaker) { setSpeechError('Only the current speaker can start speech-to-sign.'); return; }
+    if (signToSpeech.listening) signToSpeech.stop();
     setSpeechError('');
     speech.start();
   }
 
   function handleStopSpeech() { speech.stop(); setLatestInterim(''); }
 
+  function handleStartSignToSpeech() {
+    if (isMuted) { setSpeechError('Unmute to use Speak with Sign.'); return; }
+    if (!isCurrentSpeaker) { setSpeechError('Only the current speaker can use Speak with Sign.'); return; }
+    if (speech.listening) { speech.stop(); setLatestInterim(''); }
+    setSpeechError('');
+    signToSpeech.start();
+  }
+
+  function handleStopSignToSpeech() { signToSpeech.stop(); }
+
   useEffect(() => { setLatestInterim(speech.interimText || ''); }, [speech.interimText]);
   useEffect(() => { if (speech.lastError) setSpeechError(speech.lastError); }, [speech.lastError]);
   useEffect(() => { if (!isCurrentSpeaker && speech.listening) { speech.stop(); setLatestInterim(''); } }, [isCurrentSpeaker, speech]);
   useEffect(() => { if (isMuted && speech.listening) { speech.stop(); setLatestInterim(''); } }, [isMuted, speech]);
+  useEffect(() => { if (signToSpeech.error) setSpeechError(signToSpeech.error); }, [signToSpeech.error]);
+  useEffect(() => { if (!isCurrentSpeaker && signToSpeech.listening) signToSpeech.stop(); }, [isCurrentSpeaker, signToSpeech]);
 
   // ─── PRE-JOIN ─────────────────────────────────────────────────────────────────
   if (!hasJoined) {
@@ -561,12 +586,29 @@ export function RoomPage() {
               <span className="dock-icon">🤟</span><span>Start Sign</span>
             </button>
           )}
+          {isCurrentSpeaker && (
+            signToSpeech.listening ? (
+              <button type="button" className="dock-btn dock-btn--sign" onClick={handleStopSignToSpeech}>
+                <span className="dock-icon">🔊</span><span>Stop Speak</span>
+              </button>
+            ) : (
+              <button type="button" className="dock-btn" onClick={handleStartSignToSpeech} disabled={isMuted}>
+                <span className="dock-icon">🔊</span><span>Speak with Sign</span>
+              </button>
+            )
+          )}
           <button type="button" className="dock-btn dock-btn--leave" onClick={handleLeaveMeeting}>
             <span className="dock-icon">↩</span><span>Leave</span>
           </button>
         </div>
 
         {latestInterim ? <p className="room-live-interim">"{latestInterim}"</p> : null}
+        {signToSpeech.listening && (
+          <p className="room-live-interim">
+            {signToSpeech.currentLetter ? `Signing: ${signToSpeech.currentLetter}` : 'Watching hands…'}
+            {signToSpeech.currentWord ? ` · Word so far: ${signToSpeech.currentWord}` : ''}
+          </p>
+        )}
         {speechError ? <p className="room-live-warning">{speechError}</p> : null}
         {error ? <p className="room-live-warning">{error}</p> : null}
 
