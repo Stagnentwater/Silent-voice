@@ -20,7 +20,24 @@ from flask import Flask, Response, request, make_response, jsonify
 
 dotenv.load_dotenv()
 app = Flask(__name__)
-CORS(app)
+
+
+def _parse_cors_origins(value: str):
+    raw = (value or "*").strip()
+    if raw == "*":
+        return "*"
+
+    parts = [item.strip() for item in raw.split(",") if item.strip()]
+    return parts or "*"
+
+
+cors_origins = _parse_cors_origins(os.getenv("CORS_ORIGINS", "*"))
+CORS(
+    app,
+    resources={r"/*": {"origins": cors_origins}},
+    methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
+)
 
 
 class RollingWindowStats:

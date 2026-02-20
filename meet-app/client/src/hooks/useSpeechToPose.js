@@ -55,7 +55,13 @@ export function useSpeechToPose({ poseClient, onPoseReady, speakerId }) {
             speakerId
           });
         } catch (error) {
-          setLastError(error.message || 'Pose lookup failed');
+          if (error?.name === 'AbortError') {
+            return; // ignore aborts triggered by stop/timeout
+          }
+          const message = error?.message === 'Pose request timed out'
+            ? 'Pose request timed out; please try again.'
+            : (error?.message || 'Pose lookup failed');
+          setLastError(message);
         }
       }
     } finally {

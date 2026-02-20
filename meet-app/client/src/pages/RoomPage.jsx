@@ -125,7 +125,6 @@ export function RoomPage() {
   });
 
   const isCurrentSpeaker = Boolean(user?.id && speakerId && user.id === speakerId);
-
   const speech = useSpeechToPose({
     poseClient,
     speakerId: user?.id,
@@ -172,13 +171,54 @@ export function RoomPage() {
     let active = true;
     async function loadPreview() {
       setMediaError('');
+
+      const hasGetUserMedia =
+        typeof navigator !== 'undefined' &&
+        Boolean(navigator.mediaDevices?.getUserMedia);
+
+      if (!hasGetUserMedia) {
+        const overHttpOnLan =
+          typeof window !== 'undefined' &&
+          window.location.protocol === 'http:' &&
+          window.location.hostname !== 'localhost' &&
+          window.location.hostname !== '127.0.0.1';
+
+        if (overHttpOnLan) {
+          setMediaError('Camera is blocked on HTTP LAN URLs. Open the app over HTTPS (or localhost) and try again.');
+          return;
+        }
+
+        setMediaError('Camera API is unavailable in this browser context.');
+        return;
+      }
+
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
         if (!active) { stream.getTracks().forEach((t) => t.stop()); return; }
         stream.getAudioTracks().forEach((t) => { t.enabled = !isMuted; });
         stream.getVideoTracks().forEach((t) => { t.enabled = !isVideoOff; });
         setPreviewStream(stream);
-      } catch {
+      } catch (error) {
+        if (error?.name === 'NotAllowedError') {
+          setMediaError('Camera permission was denied. Allow camera access and try again.');
+          return;
+        }
+
+        if (error?.name === 'NotFoundError') {
+          setMediaError('No camera device was found.');
+          return;
+        }
+
+        if (error?.name === 'NotReadableError') {
+          setMediaError('Camera is already in use by another app.');
+          return;
+        }
+
+        if (error?.name === 'SecurityError') {
+          setMediaError('Camera requires HTTPS (or localhost).');
+          return;
+        }
+
         setMediaError('Camera access is required to preview before joining.');
       }
     }
@@ -417,7 +457,11 @@ export function RoomPage() {
 
           <article className="room-live-feature-tile room-live-avatar-tile">
             <div className="room-live-media-wrap room-live-avatar-media">
-              <AvatarCanvas latestPosePacket={latestPosePacket} compact />
+              <AvatarCanvas
+                latestPosePacket={latestPosePacket}
+                displayText={latestInterim || latestPosePacket?.text || ''}
+                compact
+              />
             </div>
             <div className="room-live-tile-footer">
               <span className="room-live-tile-name">Sign Avatar</span>

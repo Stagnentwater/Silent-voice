@@ -8,7 +8,73 @@ const roomRoutes = require("./routes/roomRoutes");
 const app = express();
 const port = Number(process.env.PORT || 3001);
 
-app.use(cors());
+function normalizeOrigin(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return raw.replace(/\/$/, "");
+  }
+}
+
+const defaultAllowedOrigins = [
+  "http://localhost:5173",
+  "https://localhost:5173",
+  "https://silent-voice-vc1h.vercel.app"
+];
+
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || defaultAllowedOrigins.join(","))
+  .split(",")
+  .map((value) => normalizeOrigin(value))
+  .filter(Boolean);
+
+const defaultAllowedOriginPatterns = ["^https://.*\\.vercel\\.app$"];
+const allowedOriginPatterns = (
+  process.env.ALLOWED_ORIGIN_PATTERNS || defaultAllowedOriginPatterns.join(",")
+)
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean)
+  .map((pattern) => {
+    try {
+      return new RegExp(pattern);
+    } catch {
+      return null;
+    }
+  })
+  .filter(Boolean);
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      const normalizedOrigin = normalizeOrigin(origin);
+      const matchesPattern = allowedOriginPatterns.some((pattern) =>
+        pattern.test(normalizedOrigin)
+      );
+
+      if (
+        allowedOrigins.length === 0 ||
+        allowedOrigins.includes(normalizedOrigin) ||
+        matchesPattern
+      ) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error("Not allowed by CORS"));
+    },
+    credentials: true
+  })
+);
 app.use(express.json());
 
 app.get("/health", (req, res) => {
@@ -24,6 +90,10 @@ app.use((err, req, res, next) => {
   res.status(status).json({ error: message });
 });
 
-app.listen(port, () => {
-  console.log(`Auth server listening on port ${port}`);
-});
+module.exports = app;
+
+if (require.main === module) {
+  app.listen(port, "0.0.0.0", () => {
+    console.log(`Auth server listening on http://0.0.0.0:${port}`);
+  });
+}

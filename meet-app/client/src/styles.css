@@ -817,6 +817,25 @@ button.danger {
   scrollbar-color: #2a2820 transparent;
 }
 
+.avatar-tile-content--with-caption {
+  position: relative;
+}
+
+.avatar-caption {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  color: #ff4d4d;
+  font-weight: 700;
+  font-size: 14px;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+
 .room-live-tile {
   flex: 0 0 200px;
   min-width: 200px;

@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:3001';
+import { API_BASE_URL } from '../config/network.js';
 
 async function request(path, payload, options = {}) {
   const headers = {
@@ -9,11 +9,16 @@ async function request(path, payload, options = {}) {
     headers.Authorization = `Bearer ${options.token}`;
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload)
-  });
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload)
+    });
+  } catch {
+    throw new Error('Network error: unable to reach authentication server. Check API URL and CORS settings.');
+  }
 
   const data = await response.json().catch(() => ({}));
 

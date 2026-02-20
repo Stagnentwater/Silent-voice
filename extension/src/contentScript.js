@@ -23,11 +23,14 @@ const AGGRESSIVE_PREFETCH_POLL_MS = 300;
 const AGGRESSIVE_BATCH_SIZE = 6;
 const AGGRESSIVE_BATCH_SIZE_PAUSED = 12;
 const CONTINUOUS_FETCH_POLL_MS = 120;
+const PLAYER_BIND_POLL_MS = 500;
 let avatar, avatarContainer, currentSegment, word, fetchProgress;
 let queueProcessing = false;
 let activeAnimationRafId = null;
 let activeAnimationRunId = 0;
 let activeSegmentId = null;
+let resumeAnimationFn = null;
+let isPlayerPaused = false;
 let continuousFetchTimer = null;
 const poseCache = new Map();
 
@@ -67,9 +70,13 @@ function addContainer() {
 
   avatarContainer = document.createElement('div');
   avatarContainer.id = 'avatar-container';
+  avatarContainer.style.position = 'relative';
   avatar = document.createElement('canvas');
   avatar.id = 'avatar';
+  avatar.style.position = 'relative';
+  avatar.style.zIndex = '1';
   avatarContainer.appendChild(avatar);
+
   word = document.createElement('p');
   word.id = 'word';
   avatarContainer.appendChild(word);
@@ -173,6 +180,15 @@ function getCacheKey(segment) {
   return (segment.text || '').trim().toLowerCase();
 }
 
+function getSegmentAtTime(time) {
+  if (!transcript) return null;
+  return (
+    transcript.find(
+      (segment) => segment.offset <= time && segment.offset + segment.duration >= time
+    ) || null
+  );
+}
+
 function stopActiveAnimation() {
   activeAnimationRunId += 1;
   if (activeAnimationRafId !== null) {
@@ -180,6 +196,33 @@ function stopActiveAnimation() {
     activeAnimationRafId = null;
   }
   activeSegmentId = null;
+  resumeAnimationFn = null;
+}
+
+function syncPlaybackToCurrentTimestamp() {
+  if (!transcript) return;
+
+  const currentTime = getCurrentTime();
+  const segment = getSegmentAtTime(currentTime);
+
+  if (!segment) {
+    currentSegment = null;
+    stopActiveAnimation();
+    if (word) word.innerText = '';
+    return;
+  }
+
+  currentSegment = segment;
+
+  if (!segment.poses && !segment.loading && !segment.skipped) {
+    processQueue(currentTime);
+    if (word) word.innerText = 'Loading sign poses...';
+    return;
+  }
+
+  if (segment.poses) {
+    playAnimation(segment);
+  }
 }
 
 function fetchSegmentPoses(segment) {
@@ -413,9 +456,49 @@ function playAnimation(segment) {
   let frameIndex = 0;
   let firstFrameLogged = false;
   let lastFrameAt = 0;
+  let lastRenderedFrame = -1;
+
+  function drawFrame(now) {
+    const landmark = poses[frameIndex];
+    if (!landmark) return;
+
+    if (word) word.innerText = '';
+    ctx.clearRect(0, 0, avatar.width, avatar.height);
+    drawLandmarks(landmark, ctx);
+
+    const poseWord =
+      typeof landmark.word === 'string' && landmark.word.trim().length
+        ? landmark.word
+        : segment.text || '';
+
+    if (word) {
+      word.innerText = poseWord || '';
+    }
+
+    if (!firstFrameLogged && segment.poseResponseReceivedAtMs) {
+      firstFrameLogged = true;
+      const firstMotionDelayMs = performance.now() - segment.poseResponseReceivedAtMs;
+      console.info(
+        '[sv][perf] first-motion delay (response->first-frame):',
+        `${firstMotionDelayMs.toFixed(1)}ms`,
+        { text: segment.text, frames: poses.length }
+      );
+    }
+
+    lastFrameAt = now;
+    lastRenderedFrame = frameIndex;
+  }
 
   function animate(now) {
     if (runId !== activeAnimationRunId) {
+      return;
+    }
+
+    if (isPlayerPaused) {
+      if (lastRenderedFrame !== frameIndex) {
+        drawFrame(now);
+      }
+      // Do not schedule another frame while paused.
       return;
     }
 
@@ -428,33 +511,70 @@ function playAnimation(segment) {
       return;
     }
 
+    const player = document.querySelector('video');
+    const isPaused = isPlayerPaused || (!!player && player.paused && !player.ended);
+
+    if (isPaused) {
+      if (lastRenderedFrame !== frameIndex) {
+        drawFrame(now);
+      }
+      // Freeze the frame while paused; restart when playback resumes.
+      isPlayerPaused = true;
+      if (activeAnimationRafId) {
+        cancelAnimationFrame(activeAnimationRafId);
+      }
+      activeAnimationRafId = null;
+      resumeAnimationFn = () => {
+        if (runId === activeAnimationRunId && !activeAnimationRafId && !isPlayerPaused) {
+          activeAnimationRafId = requestAnimationFrame(animate);
+        }
+      };
+      return;
+    }
+
     if (lastFrameAt && now - lastFrameAt < frameDurationMs) {
       activeAnimationRafId = requestAnimationFrame(animate);
       return;
     }
-    lastFrameAt = now;
 
-    const landmark = poses[frameIndex];
-
-    if (word) word.innerText = '';
-    ctx.clearRect(0, 0, avatar.width, avatar.height);
-    drawLandmarks(landmark, ctx);
-
-    if (!firstFrameLogged && segment.poseResponseReceivedAtMs) {
-      firstFrameLogged = true;
-      const firstMotionDelayMs = performance.now() - segment.poseResponseReceivedAtMs;
-      console.info(
-        '[sv][perf] first-motion delay (response->first-frame):',
-        `${firstMotionDelayMs.toFixed(1)}ms`,
-        { text: segment.text, frames: poses.length }
-      );
-    }
-
+    drawFrame(now);
     frameIndex++;
     activeAnimationRafId = requestAnimationFrame(animate);
   }
 
   activeAnimationRafId = requestAnimationFrame(animate);
+}
+
+function bindPlayerEvents() {
+  const player = document.querySelector('video');
+  if (!player || player.__svPlaybackBound) return;
+
+  player.__svPlaybackBound = true;
+
+  const resume = () => {
+    isPlayerPaused = false;
+    stopActiveAnimation();
+    syncPlaybackToCurrentTimestamp();
+  };
+
+  const pause = () => {
+    isPlayerPaused = true;
+    if (activeAnimationRafId) {
+      cancelAnimationFrame(activeAnimationRafId);
+      activeAnimationRafId = null;
+    }
+  };
+
+  player.addEventListener('play', resume);
+  player.addEventListener('playing', resume);
+  player.addEventListener('seeked', resume);
+  player.addEventListener('pause', pause);
+}
+
+function startPlayerBindingLoop() {
+  setInterval(() => {
+    bindPlayerEvents();
+  }, PLAYER_BIND_POLL_MS);
 }
 
 function initializeExtension() {
@@ -513,11 +633,10 @@ function initializeExtension() {
 
     if (!transcript) return;
 
-    const nextCurrentSegment = transcript.find(
-      (segment) =>
-        segment.offset <= currentTime &&
-        segment.offset + segment.duration >= currentTime
-    );
+    // If the player is paused, keep the current frame frozen and skip any playback triggers.
+    if (isPlayerPaused) return;
+
+    const nextCurrentSegment = getSegmentAtTime(currentTime);
 
     if (!nextCurrentSegment) {
       currentSegment = null;
@@ -532,7 +651,9 @@ function initializeExtension() {
         if (currentSegment.skipped) {
           word.innerText = '';
         } else {
-          word.innerText = currentSegment.poses ? '' : 'Loading sign poses...';
+          if (!currentSegment.poses) {
+            word.innerText = 'Loading sign poses...';
+          }
         }
       }
     }
@@ -542,11 +663,22 @@ function initializeExtension() {
     }
 
     if (currentSegment.poses) {
+      const player = document.querySelector('video');
+      const paused = !!player && player.paused && !player.ended;
+      if (paused) {
+        const segId = getSegmentId(currentSegment);
+        if (activeSegmentId === segId) {
+          return;
+        }
+        return;
+      }
       playAnimation(currentSegment);
     }
   }, SEGMENT_POLL_MS);
 
   ensureContainerWithRetry();
+  bindPlayerEvents();
+  startPlayerBindingLoop();
 }
 
 function observeUrlChanges() {

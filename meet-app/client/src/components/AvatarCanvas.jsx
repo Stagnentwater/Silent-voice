@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { PoseRenderer2D } from '../avatar/PoseRenderer2D.js';
 
-export function AvatarCanvas({ latestPosePacket, compact = false }) {
+export function AvatarCanvas({ latestPosePacket, displayText = '', compact = false }) {
   const canvasRef = useRef(null);
   const rendererRef = useRef(null);
 
@@ -33,16 +33,20 @@ export function AvatarCanvas({ latestPosePacket, compact = false }) {
 
   if (compact) {
     return (
-      <div className="avatar-tile-content">
+      <div className="avatar-tile-content avatar-tile-content--with-caption">
         <canvas ref={canvasRef} className="avatar-canvas avatar-canvas-compact" />
+        {displayText ? <div className="avatar-caption">{displayText}</div> : null}
       </div>
     );
   }
 
   return (
     <section className="panel avatar-panel">
-      <h2>Sign Avatar (2D)</h2>
-      <canvas ref={canvasRef} className="avatar-canvas" />
+      <h2>Sign Avatar</h2>
+      <div className="avatar-tile-content avatar-tile-content--with-caption">
+        <canvas ref={canvasRef} className="avatar-canvas" />
+        {displayText ? <div className="avatar-caption">{displayText}</div> : null}
+      </div>
     </section>
   );
 }
