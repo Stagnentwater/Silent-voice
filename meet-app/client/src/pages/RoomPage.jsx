@@ -88,7 +88,7 @@ function StreamView({ stream, muted, showSpeakingBorder = false }) {
     };
   }, [showSpeakingBorder, stream, muted]);
 
-  if (!stream) return <div className="room-live-placeholder">No stream</div>;
+  if (!stream) return <div className="room-live-placeholder">Connecting…</div>;
 
   return (
     <div ref={wrapRef} className={`stream-wrap${showSpeakingBorder ? ' stream-wrap--monitored' : ''}`}>
