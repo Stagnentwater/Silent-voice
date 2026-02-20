@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
 
 const PORT = Number(process.env.SIGNALING_PORT || 8080);
+const HOST = process.env.SIGNALING_HOST || '0.0.0.0';
 const rooms = new Map();
 
 function getRoom(roomId) {
@@ -124,9 +125,13 @@ const server = http.createServer((req, res) => {
 
 const wss = new WebSocketServer({ server });
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
   let currentRoomId = '';
   let currentPeerId = '';
+  const remoteAddress = req?.socket?.remoteAddress || 'unknown';
+  const requestPath = req?.url || '/';
+
+  console.log(`[ws] connection from=${remoteAddress} path=${requestPath}`);
 
   ws.on('message', (raw) => {
     let message;
@@ -173,6 +178,10 @@ wss.on('connection', (ws) => {
         username,
         isHost
       });
+
+      console.log(
+        `[ws] joined room=${roomId} peer=${currentPeerId} user=${userId} participants=${room.clients.size}`
+      );
 
       send(ws, {
         type: 'joined-room',
@@ -284,10 +293,11 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
+    console.log(`[ws] disconnected peer=${currentPeerId || 'unknown'} room=${currentRoomId || 'none'}`);
     removePeer(currentRoomId, currentPeerId);
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Signaling server listening on ws://localhost:${PORT}`);
+server.listen(PORT, HOST, () => {
+  console.log(`Signaling server listening on ws://${HOST}:${PORT}`);
 });

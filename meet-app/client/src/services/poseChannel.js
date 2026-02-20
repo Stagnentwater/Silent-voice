@@ -49,13 +49,13 @@ function downsamplePoseFrames(poseFrames, timings) {
 
   for (let index = 0; index < poseFrames.length; index += step) {
     sampledFrames.push(poseFrames[index]);
-    sampledTimings.push(timings?.[index] ?? index * 50);
+    sampledTimings.push(timings?.[index] ?? index * 100);
   }
 
   const lastIndex = poseFrames.length - 1;
   if (sampledFrames[sampledFrames.length - 1] !== poseFrames[lastIndex]) {
     sampledFrames.push(poseFrames[lastIndex]);
-    sampledTimings.push(timings?.[lastIndex] ?? lastIndex * 50);
+    sampledTimings.push(timings?.[lastIndex] ?? lastIndex * 100);
   }
 
   return {

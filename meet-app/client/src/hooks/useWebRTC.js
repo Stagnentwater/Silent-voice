@@ -26,6 +26,7 @@ function parseIceServers() {
 }
 
 export function useWebRTC({ signalingUrl, onPosePacket }) {
+  const JOIN_ACK_TIMEOUT_MS = 8000;
   const [localStream, setLocalStream] = useState(null);
   const [remoteStreams, setRemoteStreams] = useState({});
   const [participants, setParticipants] = useState({});
@@ -41,9 +42,22 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
   const currentUserRef = useRef({ userId: null, username: null });
   const hostHintRef = useRef(null);
   const roomIdRef = useRef('');
+  const peerIdRef = useRef('');
   const peersRef = useRef(new Map());
   const dataChannelsRef = useRef(new Map());
+  const pendingJoinRef = useRef(null);
   const iceServers = useMemo(parseIceServers, []);
+
+  const settlePendingJoin = useCallback((resolver, payloadOrError) => {
+    if (!pendingJoinRef.current) {
+      return;
+    }
+
+    const { timeoutId } = pendingJoinRef.current;
+    clearTimeout(timeoutId);
+    pendingJoinRef.current = null;
+    resolver(payloadOrError);
+  }, []);
 
   const cleanupPeer = useCallback((targetPeerId) => {
     const connection = peersRef.current.get(targetPeerId);
@@ -114,17 +128,20 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       signalingClientRef.current.send('signal', {
         roomId: roomIdRef.current,
         targetPeerId,
-        fromPeerId: peerId || undefined,
+        fromPeerId: peerIdRef.current || undefined,
         signal: { type: 'candidate', candidate: event.candidate }
       });
     };
 
     peerConnection.ontrack = (event) => {
-      const [stream] = event.streams;
-      if (!stream) {
+      const [incoming] = event.streams;
+      const stream = incoming || new MediaStream();
+      // Clone to force React state updates and keep only live tracks
+      const cleanStream = new MediaStream(stream.getTracks().filter((t) => t.readyState === 'live'));
+      if (!cleanStream.getTracks().length) {
         return;
       }
-      setRemoteStreams((current) => ({ ...current, [targetPeerId]: stream }));
+      setRemoteStreams((current) => ({ ...current, [targetPeerId]: cleanStream }));
     };
 
     peerConnection.onconnectionstatechange = () => {
@@ -150,7 +167,7 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
 
     peersRef.current.set(targetPeerId, peerConnection);
     return peerConnection;
-  }, [attachDataChannel, cleanupPeer, iceServers, peerId]);
+  }, [attachDataChannel, cleanupPeer, iceServers]);
 
   const connectToPeer = useCallback(async (targetPeerId) => {
     const peerConnection = createPeerConnection(targetPeerId, true);
@@ -160,19 +177,19 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
     signalingClientRef.current?.send('signal', {
       roomId: roomIdRef.current,
       targetPeerId,
-      fromPeerId: peerId || undefined,
+      fromPeerId: peerIdRef.current || undefined,
       signal: {
         type: 'offer',
         sdp: peerConnection.localDescription
       }
     });
-  }, [createPeerConnection, peerId]);
+  }, [createPeerConnection]);
 
   const leaveRoom = useCallback(() => {
     if (signalingClientRef.current && roomIdRef.current) {
       signalingClientRef.current.send('leave-room', {
         roomId: roomIdRef.current,
-        peerId
+        peerId: peerIdRef.current || undefined
       });
     }
 
@@ -191,9 +208,11 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
     setIsHost(false);
     setConnectionState('idle');
     setJoinedRoom('');
+    setPeerId('');
+    peerIdRef.current = '';
     hostHintRef.current = null;
     roomIdRef.current = '';
-  }, [cleanupPeer, peerId]);
+  }, [cleanupPeer]);
 
   const ensureSignaling = useCallback(() => {
     if (signalingClientRef.current) {
@@ -211,6 +230,7 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
         null;
 
       roomIdRef.current = roomId;
+      peerIdRef.current = assignedPeerId;
       setJoinedRoom(roomId);
       setPeerId(assignedPeerId);
       setHostId(resolvedHostId);
@@ -243,6 +263,14 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       }));
 
       setConnectionState('connected');
+
+      if (pendingJoinRef.current) {
+        settlePendingJoin(pendingJoinRef.current.resolve, {
+          roomId,
+          peerId: assignedPeerId
+        });
+      }
+
       (peers || []).forEach((targetPeerId) => {
         connectToPeer(targetPeerId).catch(() => {
           cleanupPeer(targetPeerId);
@@ -259,13 +287,9 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       }
 
       const resolvedPeerId = participant?.peerId || targetPeerId;
-      if (!resolvedPeerId || resolvedPeerId === peerId) {
+      if (!resolvedPeerId || resolvedPeerId === peerIdRef.current) {
         return;
       }
-
-      connectToPeer(resolvedPeerId).catch(() => {
-        cleanupPeer(resolvedPeerId);
-      });
     });
 
     client.on('peer-left', ({ peerId: targetPeerId }) => {
@@ -294,45 +318,79 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
         return;
       }
 
-      const initiator = false;
-      const peerConnection = createPeerConnection(fromPeerId, initiator);
+      try {
+        const initiator = false;
+        const peerConnection = createPeerConnection(fromPeerId, initiator);
 
-      if (signal.type === 'offer') {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
+        if (signal.type === 'offer') {
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+          const answer = await peerConnection.createAnswer();
+          await peerConnection.setLocalDescription(answer);
 
-        client.send('signal', {
-          roomId: roomIdRef.current,
-          targetPeerId: fromPeerId,
-          fromPeerId: peerId || undefined,
-          signal: {
-            type: 'answer',
-            sdp: peerConnection.localDescription
-          }
-        });
-      } else if (signal.type === 'answer') {
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(signal.sdp));
-      } else if (signal.type === 'candidate' && signal.candidate) {
-        await peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
+          client.send('signal', {
+            roomId: roomIdRef.current,
+            targetPeerId: fromPeerId,
+            fromPeerId: peerIdRef.current || undefined,
+            signal: {
+              type: 'answer',
+              sdp: peerConnection.localDescription
+            }
+          });
+        } else if (signal.type === 'answer') {
+          await peerConnection.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+        } else if (signal.type === 'candidate' && signal.candidate) {
+          await peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
+        }
+      } catch {
+        cleanupPeer(fromPeerId);
+      }
+    });
+
+    client.on('error', ({ message }) => {
+      setConnectionState('error');
+
+      if (pendingJoinRef.current) {
+        settlePendingJoin(
+          pendingJoinRef.current.reject,
+          new Error(message || 'Unable to join room')
+        );
       }
     });
 
     signalingClientRef.current = client;
     return client;
-  }, [cleanupPeer, connectToPeer, createPeerConnection, peerId, signalingUrl]);
+  }, [cleanupPeer, connectToPeer, createPeerConnection, settlePendingJoin, signalingUrl]);
 
   const joinRoom = useCallback(async (roomId, options = {}) => {
     if (!roomId) {
       throw new Error('Room ID is required');
     }
 
+    if (pendingJoinRef.current) {
+      settlePendingJoin(
+        pendingJoinRef.current.reject,
+        new Error('Previous join attempt was replaced by a new attempt.')
+      );
+    }
+
     setConnectionState('connecting');
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: true
-    });
+    let stream = null;
+    const supportsGetUserMedia =
+      typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getUserMedia);
+
+    if (supportsGetUserMedia) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: true
+        });
+      } catch {
+        stream = new MediaStream();
+      }
+    } else {
+      stream = new MediaStream();
+    }
 
     const audioEnabled = options?.audioEnabled ?? true;
     const videoEnabled = options?.videoEnabled ?? true;
@@ -358,6 +416,24 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       username: options?.username || null
     };
 
+    const joinAck = new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        if (!pendingJoinRef.current) {
+          return;
+        }
+
+        pendingJoinRef.current = null;
+        setConnectionState('error');
+        reject(new Error('Signaling server did not confirm join. Please try again.'));
+      }, JOIN_ACK_TIMEOUT_MS);
+
+      pendingJoinRef.current = {
+        resolve,
+        reject,
+        timeoutId
+      };
+    });
+
     client.send('join-room', {
       roomId,
       peerId: peerId || undefined,
@@ -365,7 +441,9 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       username: options?.username || undefined,
       hostId: options?.hostId || undefined
     });
-  }, [ensureSignaling, peerId]);
+
+    await joinAck;
+  }, [ensureSignaling, peerId, settlePendingJoin]);
 
   const setSpeaker = useCallback((nextSpeakerId) => {
     if (!signalingClientRef.current || !roomIdRef.current) {
@@ -394,7 +472,7 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
         signalingClientRef.current.send('signal', {
           roomId: roomIdRef.current,
           targetPeerId,
-          fromPeerId: peerId || undefined,
+          fromPeerId: peerIdRef.current || undefined,
           signal: {
             type: 'pose-packet',
             packet
@@ -409,15 +487,22 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
         packet
       });
     }
-  }, [peerId]);
+  }, []);
 
   useEffect(() => () => {
+    if (pendingJoinRef.current) {
+      settlePendingJoin(
+        pendingJoinRef.current.reject,
+        new Error('Join cancelled')
+      );
+    }
+
     leaveRoom();
     if (signalingClientRef.current) {
       signalingClientRef.current.close();
       signalingClientRef.current = null;
     }
-  }, [leaveRoom]);
+  }, [leaveRoom, settlePendingJoin]);
 
   return {
     localStream,

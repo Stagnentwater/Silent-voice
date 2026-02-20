@@ -1,4 +1,4 @@
-const DEFAULT_TIMEOUT_MS = 7000;
+const DEFAULT_TIMEOUT_MS = 12000;
 const TARGET_FRAME_MS = 50;
 
 const REQUIRED_POSE_INDICES = [0, 11, 12, 13, 14, 15, 16, 23, 24];
@@ -124,6 +124,11 @@ export function createPoseClient(baseUrl) {
         }
 
         throw new Error('Invalid pose payload shape');
+      } catch (error) {
+        if (error?.name === 'AbortError') {
+          throw new Error('Pose request timed out');
+        }
+        throw error;
       } finally {
         clear();
       }

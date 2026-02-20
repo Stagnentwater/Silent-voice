@@ -162,14 +162,92 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
         return overlay;
       }
 
-      function drawPoints(ctx, points, color = '#00FF7F') {
-        if (!Array.isArray(points)) return;
-        ctx.fillStyle = color;
-        for (const p of points) {
-          const x = Math.max(0, Math.min(1, p.x || 0)) * ctx.canvas.width;
-          const y = Math.max(0, Math.min(1, p.y || 0)) * ctx.canvas.height;
+      function pathToConnections(path, closed = false) {
+        const connections = [];
+        for (let index = 0; index < path.length - 1; index += 1) {
+          connections.push([path[index], path[index + 1]]);
+        }
+        if (closed && path.length > 2) {
+          connections.push([path[path.length - 1], path[0]]);
+        }
+        return connections;
+      }
+
+      const POSE_CONNECTIONS = [
+        [11, 12],
+        [11, 13],
+        [13, 15],
+        [12, 14],
+        [14, 16],
+        [11, 23],
+        [12, 24],
+        [23, 24],
+      ];
+
+      const HAND_CONNECTIONS = [
+        [0, 1], [1, 2], [2, 3], [3, 4],
+        [0, 5], [5, 6], [6, 7], [7, 8],
+        [5, 9], [9, 10], [10, 11], [11, 12],
+        [9, 13], [13, 14], [14, 15], [15, 16],
+        [13, 17], [17, 18], [18, 19], [19, 20],
+        [0, 17],
+      ];
+
+      const FACE_CONNECTIONS = [
+        ...pathToConnections([
+          10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379,
+          378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127,
+          162, 21, 54, 103, 67, 109,
+        ], true),
+        ...pathToConnections([33, 7, 163, 144, 145, 153, 154, 155, 133], true),
+        ...pathToConnections([263, 249, 390, 373, 374, 380, 381, 382, 362], true),
+        ...pathToConnections([
+          61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317,
+          14, 87, 178, 88, 95, 185, 40, 39, 37, 0, 267, 269, 270, 409, 415, 310, 311,
+          312, 13, 82, 81, 80, 191,
+        ], true),
+      ];
+
+      function getPointAt(points, index) {
+        if (!points) return null;
+        if (Array.isArray(points)) return points[index] || null;
+        if (typeof points === 'object') return points[index] || points[String(index)] || null;
+        return null;
+      }
+
+      function mapPointToCanvas(ctx, point) {
+        if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+        return {
+          x: Math.max(0, Math.min(1, point.x)) * ctx.canvas.width,
+          y: Math.max(0, Math.min(1, point.y)) * ctx.canvas.height,
+        };
+      }
+
+      function drawConnections(ctx, points, connections, color = '#00FF7F', lineWidth = 1) {
+        if (!points || !Array.isArray(connections) || !connections.length) return;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = lineWidth;
+        ctx.lineCap = 'round';
+        for (const [start, end] of connections) {
+          const a = mapPointToCanvas(ctx, getPointAt(points, start));
+          const b = mapPointToCanvas(ctx, getPointAt(points, end));
+          if (!a || !b) continue;
           ctx.beginPath();
-          ctx.arc(x, y, 2, 0, Math.PI * 2);
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
+        }
+      }
+
+      function drawPoints(ctx, points, color = '#00FF7F') {
+        if (!points) return;
+        const source = Array.isArray(points) ? points : Object.values(points);
+        ctx.fillStyle = color;
+        for (const p of source) {
+          const mapped = mapPointToCanvas(ctx, p);
+          if (!mapped) continue;
+          ctx.beginPath();
+          ctx.arc(mapped.x, mapped.y, 2, 0, Math.PI * 2);
           ctx.fill();
         }
       }
@@ -197,6 +275,11 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
             const f = frames[i];
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             wordEl.textContent = f.word || wordEl.textContent;
+            drawConnections(ctx, f.pose_landmarks, POSE_CONNECTIONS, '#16a34a', 2);
+            drawConnections(ctx, f.face_landmarks, FACE_CONNECTIONS, '#06b6d4', 0.8);
+            drawConnections(ctx, f.right_hand_landmarks, HAND_CONNECTIONS, '#eab308', 2);
+            drawConnections(ctx, f.left_hand_landmarks, HAND_CONNECTIONS, '#ec4899', 2);
+
             drawPoints(ctx, f.pose_landmarks, '#22c55e');
             drawPoints(ctx, f.face_landmarks, '#22d3ee');
             drawPoints(ctx, f.right_hand_landmarks, '#facc15');

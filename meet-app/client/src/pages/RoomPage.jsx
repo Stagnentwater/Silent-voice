@@ -6,9 +6,7 @@ import { useSpeechToPose } from '../hooks/useSpeechToPose.js';
 import { createPoseClient } from '../services/poseApi.js';
 import { createPosePacket } from '../services/poseChannel.js';
 import { AvatarCanvas } from '../components/AvatarCanvas.jsx';
-
-const SIGNALING_URL = import.meta.env.VITE_SIGNALING_URL || 'ws://localhost:8080';
-const POSE_SERVER_URL = import.meta.env.VITE_POSE_SERVER_URL || 'http://localhost:5000';
+import { POSE_SERVER_URL, SIGNALING_URL } from '../config/network.js';
 
 function StreamView({ stream, muted }) {
   const videoRef = useRef(null);
@@ -20,6 +18,8 @@ function StreamView({ stream, muted }) {
     }
 
     element.srcObject = stream || null;
+    element.muted = Boolean(muted);
+    element.play?.().catch(() => {});
     return () => {
       element.srcObject = null;
     };
@@ -79,7 +79,6 @@ export function RoomPage() {
   });
 
   const isCurrentSpeaker = Boolean(user?.id && speakerId && user.id === speakerId);
-
   const speech = useSpeechToPose({
     poseClient,
     speakerId: user?.id,
@@ -149,6 +148,27 @@ export function RoomPage() {
 
     async function loadPreview() {
       setMediaError('');
+
+      const hasGetUserMedia =
+        typeof navigator !== 'undefined' &&
+        Boolean(navigator.mediaDevices?.getUserMedia);
+
+      if (!hasGetUserMedia) {
+        const overHttpOnLan =
+          typeof window !== 'undefined' &&
+          window.location.protocol === 'http:' &&
+          window.location.hostname !== 'localhost' &&
+          window.location.hostname !== '127.0.0.1';
+
+        if (overHttpOnLan) {
+          setMediaError('Camera is blocked on HTTP LAN URLs. Open the app over HTTPS (or localhost) and try again.');
+          return;
+        }
+
+        setMediaError('Camera API is unavailable in this browser context.');
+        return;
+      }
+
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           audio: true,
@@ -168,7 +188,27 @@ export function RoomPage() {
         });
 
         setPreviewStream(stream);
-      } catch {
+      } catch (error) {
+        if (error?.name === 'NotAllowedError') {
+          setMediaError('Camera permission was denied. Allow camera access and try again.');
+          return;
+        }
+
+        if (error?.name === 'NotFoundError') {
+          setMediaError('No camera device was found.');
+          return;
+        }
+
+        if (error?.name === 'NotReadableError') {
+          setMediaError('Camera is already in use by another app.');
+          return;
+        }
+
+        if (error?.name === 'SecurityError') {
+          setMediaError('Camera requires HTTPS (or localhost).');
+          return;
+        }
+
         setMediaError('Camera access is required to preview before joining.');
       }
     }
@@ -496,7 +536,11 @@ export function RoomPage() {
 
           <article className="room-live-feature-tile room-live-avatar-tile">
             <div className="room-live-media-wrap room-live-avatar-media">
-              <AvatarCanvas latestPosePacket={latestPosePacket} compact />
+              <AvatarCanvas
+                latestPosePacket={latestPosePacket}
+                displayText={latestInterim || latestPosePacket?.text || ''}
+                compact
+              />
             </div>
             <p>Sign Avatar</p>
           </article>

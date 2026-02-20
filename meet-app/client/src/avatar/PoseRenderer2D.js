@@ -12,8 +12,6 @@ function pathToConnections(path, closed = false) {
 }
 
 const POSE_CONNECTIONS = [
-  [0, 11],
-  [0, 12],
   [11, 12],
   [11, 13],
   [13, 15],
@@ -57,10 +55,10 @@ const FACE_CONNECTIONS = [
   ...pathToConnections([168, 6, 197, 195, 5, 4, 1, 19, 94, 2, 98, 327], false)
 ];
 
-const TARGET_FRAME_MS = 50;
+const TARGET_FRAME_MS = 100; // ~10fps
 const LANDMARK_BG = '#000000';
-const LANDMARK_GREEN = '#39ff6b';
-const LANDMARK_GREEN_SOFT = '#2de35f';
+const LANDMARK_STROKE = '#00ff55';
+const LANDMARK_STROKE_SOFT = '#66ff99';
 
 function lerp(a, b, t) {
   return a + (b - a) * t;
@@ -111,6 +109,8 @@ function drawLandmarkPoints(ctx, landmarks, width, height, radius, color) {
 
   const source = Array.isArray(landmarks) ? landmarks : Object.values(landmarks);
   ctx.fillStyle = color;
+  ctx.shadowColor = color;
+  ctx.shadowBlur = radius * 2;
 
   source.forEach((point) => {
     const mapped = mapToCanvasPoint(point, width, height);
@@ -122,6 +122,9 @@ function drawLandmarkPoints(ctx, landmarks, width, height, radius, color) {
     ctx.arc(mapped.x, mapped.y, radius, 0, Math.PI * 2);
     ctx.fill();
   });
+
+  ctx.shadowBlur = 0;
+  ctx.shadowColor = 'transparent';
 }
 
 function drawLandmarkConnections(ctx, landmarks, connections, width, height, color, lineWidth) {
@@ -132,6 +135,8 @@ function drawLandmarkConnections(ctx, landmarks, connections, width, height, col
   ctx.strokeStyle = color;
   ctx.lineWidth = lineWidth;
   ctx.lineCap = 'round';
+  ctx.shadowColor = color;
+  ctx.shadowBlur = lineWidth * 3;
 
   connections.forEach(([start, end]) => {
     const a = mapToCanvasPoint(getLandmarkAt(landmarks, start), width, height);
@@ -145,6 +150,9 @@ function drawLandmarkConnections(ctx, landmarks, connections, width, height, col
     ctx.lineTo(b.x, b.y);
     ctx.stroke();
   });
+
+  ctx.shadowBlur = 0;
+  ctx.shadowColor = 'transparent';
 }
 
 export class PoseRenderer2D {
@@ -155,6 +163,7 @@ export class PoseRenderer2D {
     this.sequenceStart = 0;
     this.frameHandle = null;
     this.running = false;
+    this.lastRenderAt = 0;
     this.currentPose = buildPoseFromId(0);
 
     this.resizeCanvas();
@@ -180,22 +189,39 @@ export class PoseRenderer2D {
 
     const source = hasLandmarkFrames ? sequencePayload.poseFrames : sequencePayload.poseIds;
 
+    const timingsArray = Array.isArray(sequencePayload?.timings)
+      ? sequencePayload.timings.map((t) => Number(t))
+      : null;
+
+    const explicitTimingsValid = Boolean(
+      timingsArray &&
+      timingsArray.length === source.length &&
+      timingsArray.every((t, idx) => Number.isFinite(t) && (idx === 0 || t > timingsArray[idx - 1]))
+    );
+
+    let normalizedTimings = null;
+
+    if (explicitTimingsValid) {
+      const lastIndex = timingsArray.length - 1;
+      const originalDuration = timingsArray[lastIndex];
+      const desiredDuration = source.length * TARGET_FRAME_MS;
+      const scale = originalDuration > 0 ? desiredDuration / originalDuration : 1;
+      normalizedTimings = timingsArray.map((t) => t * scale);
+    }
+
     this.sequence = source.map((entry, index) => {
       const pose = hasLandmarkFrames
         ? buildPoseFromLandmarkFrame(entry, this.currentPose)
         : buildPoseFromId(entry);
 
-      const explicitTiming = Number(sequencePayload?.timings?.[index]);
-      const frameBasedTiming = Number(entry?.frame);
+      const timing = normalizedTimings
+        ? normalizedTimings[index]
+        : index * TARGET_FRAME_MS;
 
       return {
         pose,
         rawFrame: hasLandmarkFrames ? entry : null,
-        timing: Number.isFinite(explicitTiming)
-          ? explicitTiming
-          : Number.isFinite(frameBasedTiming)
-            ? frameBasedTiming * TARGET_FRAME_MS
-            : index * TARGET_FRAME_MS
+        timing
       };
     });
 
@@ -203,16 +229,28 @@ export class PoseRenderer2D {
   }
 
   getInterpolatedPose(now) {
-    if (this.sequence.length < 2) {
-      return {
-        pose: this.sequence[0]?.pose || this.currentPose,
-        rawFrame: this.sequence[0]?.rawFrame || null
-      };
+    if (this.sequence.length === 0) {
+      return { pose: this.currentPose, rawFrame: null };
+    }
+
+    if (this.sequence.length === 1) {
+      return { pose: this.sequence[0].pose, rawFrame: this.sequence[0].rawFrame || null };
     }
 
     const elapsed = now - this.sequenceStart;
-    let left = this.sequence[0];
-    let right = this.sequence[this.sequence.length - 1];
+    const first = this.sequence[0];
+    const last = this.sequence[this.sequence.length - 1];
+
+    if (elapsed <= first.timing) {
+      return { pose: first.pose, rawFrame: first.rawFrame || null };
+    }
+
+    if (elapsed >= last.timing) {
+      return { pose: last.pose, rawFrame: last.rawFrame || null };
+    }
+
+    let left = first;
+    let right = last;
 
     for (let i = 0; i < this.sequence.length - 1; i += 1) {
       const current = this.sequence[i];
@@ -251,10 +289,10 @@ export class PoseRenderer2D {
       POSE_CONNECTIONS,
       width,
       height,
-      LANDMARK_GREEN,
-      2.2
+      LANDMARK_STROKE,
+      3.4
     );
-    drawLandmarkPoints(ctx, rawFrame.pose_landmarks, width, height, 2.2, LANDMARK_GREEN);
+    drawLandmarkPoints(ctx, rawFrame.pose_landmarks, width, height, 1.8, LANDMARK_STROKE_SOFT);
 
     drawLandmarkConnections(
       ctx,
@@ -262,10 +300,10 @@ export class PoseRenderer2D {
       HAND_CONNECTIONS,
       width,
       height,
-      LANDMARK_GREEN,
-      1.8
+      LANDMARK_STROKE,
+      2.4
     );
-    drawLandmarkPoints(ctx, rawFrame.left_hand_landmarks, width, height, 1.9, LANDMARK_GREEN_SOFT);
+    drawLandmarkPoints(ctx, rawFrame.left_hand_landmarks, width, height, 1.4, LANDMARK_STROKE_SOFT);
 
     drawLandmarkConnections(
       ctx,
@@ -273,28 +311,25 @@ export class PoseRenderer2D {
       HAND_CONNECTIONS,
       width,
       height,
-      LANDMARK_GREEN,
-      1.8
+      LANDMARK_STROKE,
+      2.4
     );
-    drawLandmarkPoints(ctx, rawFrame.right_hand_landmarks, width, height, 1.9, LANDMARK_GREEN_SOFT);
+    drawLandmarkPoints(ctx, rawFrame.right_hand_landmarks, width, height, 1.4, LANDMARK_STROKE_SOFT);
 
-    drawLandmarkConnections(
-      ctx,
-      rawFrame.face_landmarks,
-      FACE_CONNECTIONS,
-      width,
-      height,
-      LANDMARK_GREEN,
-      0.9
-    );
-
-    drawLandmarkPoints(ctx, rawFrame.face_landmarks, width, height, 1.05, LANDMARK_GREEN_SOFT);
+    drawLandmarkPoints(ctx, rawFrame.face_landmarks, width, height, 1.2, LANDMARK_STROKE_SOFT);
   }
 
   renderFrame = (now) => {
     if (!this.running) {
       return;
     }
+
+    if (this.lastRenderAt && now - this.lastRenderAt < TARGET_FRAME_MS) {
+      this.frameHandle = requestAnimationFrame(this.renderFrame);
+      return;
+    }
+
+    this.lastRenderAt = now;
 
     const state = this.getInterpolatedPose(now);
     this.currentPose = state.pose;
@@ -308,6 +343,7 @@ export class PoseRenderer2D {
     }
 
     this.running = true;
+    this.lastRenderAt = 0;
     this.frameHandle = requestAnimationFrame(this.renderFrame);
   }
 

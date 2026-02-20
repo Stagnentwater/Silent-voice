@@ -632,9 +632,9 @@ button.danger {
   inset: 0;
   height: 100dvh;
   max-height: 100dvh;
-  background: radial-gradient(circle at top, #1c1e22 0%, #111317 46%, #0a0b0d 100%);
+  background: radial-gradient(circle at 20% 0%, #15181d 0%, #0d0f13 50%, #090a0d 100%);
   color: #f1f3f6;
-  padding: 18px;
+  padding: 16px;
   display: grid;
   grid-template-columns: 1fr;
   gap: 14px;
@@ -668,7 +668,7 @@ button.danger {
   margin: 0;
   border: 1px solid #2d323b;
   border-radius: 14px;
-  background: linear-gradient(180deg, #1c1f25 0%, #15181d 100%);
+  background: linear-gradient(180deg, #161a20 0%, #11151b 100%);
   overflow: hidden;
   display: grid;
   grid-template-rows: 1fr auto;
@@ -692,7 +692,7 @@ button.danger {
   margin: 0;
   border: 1px solid #2d323b;
   border-radius: 12px;
-  background: #171a20;
+  background: #13171d;
   overflow: hidden;
   display: grid;
   grid-template-rows: 1fr auto;
@@ -748,6 +748,25 @@ button.danger {
   border-radius: 0;
   background: #000000;
 }
+
+.avatar-tile-content--with-caption {
+  position: relative;
+}
+
+.avatar-caption {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  color: #ff4d4d;
+  font-weight: 700;
+  font-size: 14px;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.35);
+}
+
 
 .room-live-more {
   position: absolute;
