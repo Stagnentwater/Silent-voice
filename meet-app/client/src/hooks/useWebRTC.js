@@ -136,6 +136,7 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       connection.onicecandidate = null;
       connection.ontrack = null;
       connection.ondatachannel = null;
+      connection.onconnectionstatechange = null;
       connection.close();
     }
 
@@ -152,12 +153,6 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
     makingOfferRef.current.delete(targetPeerId);
     ignoreOfferRef.current.delete(targetPeerId);
     pendingCandidatesRef.current.delete(targetPeerId);
-
-    setParticipants((current) => {
-      const next = { ...current };
-      delete next[targetPeerId];
-      return next;
-    });
 
     setRemoteStreams((current) => {
       const next = { ...current };
@@ -233,6 +228,8 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       const track = event.track;
       if (!track) return;
 
+      console.log('[WebRTC] ontrack', { peerId: targetPeerId, kind: track.kind, readyState: track.readyState });
+
       setRemoteStreams((current) => {
         const existing = current[targetPeerId];
         const nextStream = new MediaStream(existing ? existing.getTracks() : []);
@@ -260,13 +257,24 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
 
     peerConnection.onconnectionstatechange = () => {
       const state = peerConnection.connectionState;
+      console.log('[WebRTC] connectionState', { peerId: targetPeerId, state });
 
       if (state === 'connected') {
         clearFailedCleanupTimer(targetPeerId);
         return;
       }
 
-      if (state === 'failed' || state === 'disconnected') {
+      if (state === 'disconnected') {
+        // Transient — attempt ICE restart but do NOT set a cleanup timer
+        try {
+          peerConnection.restartIce();
+        } catch {
+          // no-op
+        }
+        return;
+      }
+
+      if (state === 'failed') {
         try {
           peerConnection.restartIce();
         } catch {
@@ -278,10 +286,10 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
             failedCleanupTimersRef.current.delete(targetPeerId);
             const connection = peersRef.current.get(targetPeerId);
             const finalState = connection?.connectionState;
-            if (finalState === 'failed' || finalState === 'disconnected' || finalState === 'closed') {
+            if (finalState === 'failed' || finalState === 'closed') {
               cleanupPeer(targetPeerId);
             }
-          }, 6000);
+          }, 15000);
 
           failedCleanupTimersRef.current.set(targetPeerId, timeoutId);
         }
@@ -317,12 +325,14 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       return;
     }
 
-    const shouldInitiate = String(peerIdRef.current || '') < String(targetPeerId || '');
-    if (!shouldInitiate) {
+    // Only the lower-ID peer creates the DataChannel to avoid duplicates
+    const shouldCreateDataChannel = String(peerIdRef.current || '') < String(targetPeerId || '');
+    const peerConnection = createPeerConnection(targetPeerId, shouldCreateDataChannel);
+
+    // Skip if already connected or mid-negotiation
+    if (peerConnection.connectionState === 'connected') {
       return;
     }
-
-    const peerConnection = createPeerConnection(targetPeerId, true);
     if (peerConnection.signalingState !== 'stable') {
       return;
     }
@@ -433,11 +443,6 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       }
 
       (peers || []).forEach((targetPeerId) => {
-        const shouldInitiate = String(assignedPeerId || '') < String(targetPeerId || '');
-        if (!shouldInitiate) {
-          return;
-        }
-
         connectToPeer(targetPeerId).catch(() => {
           // Avoid immediate cleanup on transient offer creation races.
         });
@@ -457,11 +462,6 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
         return;
       }
 
-      const shouldInitiate = String(peerIdRef.current || '') < String(resolvedPeerId || '');
-      if (!shouldInitiate) {
-        return;
-      }
-
       connectToPeer(resolvedPeerId).catch(() => {
         // Avoid immediate cleanup on transient offer creation races.
       });
@@ -469,6 +469,11 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
 
     client.on('peer-left', ({ peerId: targetPeerId }) => {
       cleanupPeer(targetPeerId);
+      setParticipants((current) => {
+        const next = { ...current };
+        delete next[targetPeerId];
+        return next;
+      });
     });
 
     client.on('SPEAKER_CHANGED', ({ speakerId: nextSpeakerId }) => {
@@ -487,8 +492,8 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       }
 
       if (signal.type === 'pose-packet' && signal.packet) {
-        if (onPosePacket) {
-          onPosePacket(signal.packet);
+        if (onPosePacketRef.current) {
+          onPosePacketRef.current(signal.packet);
         }
         return;
       }

@@ -130,6 +130,7 @@ export function RoomPage() {
     localStream,
     remoteStreams,
     participants,
+    peerId: localPeerId,
     joinedRoom,
     hostId,
     speakerId,
@@ -398,7 +399,6 @@ export function RoomPage() {
   }
 
   // ─── LIVE MEETING ─────────────────────────────────────────────────────────────
-  const remoteEntries = Object.entries(remoteStreams);
   const participantsByPeerId = participants || {};
   const isLocalUserHost = Boolean(currentUserId && currentHostId && currentUserId === currentHostId);
   const canAssignSpeaker = Boolean(isHost || isLocalUserHost);
@@ -413,9 +413,8 @@ export function RoomPage() {
       ? user?.username || 'You'
       : Object.values(participantsByPeerId).find((p) => normalizeId(p?.userId) === currentSpeakerId)?.username || 'assigned';
 
-  const speakerPeerId = remoteEntries.find(([pid]) => {
-    const participant = participantsByPeerId[pid];
-    return normalizeId(participant?.userId) === effectiveSpeakerId;
+  const speakerPeerId = Object.entries(participantsByPeerId).find(([pid, p]) => {
+    return pid !== localPeerId && normalizeId(p?.userId) === effectiveSpeakerId;
   })?.[0] || null;
 
   const featuredSpeakerStream = !effectiveSpeakerId
@@ -438,19 +437,20 @@ export function RoomPage() {
       stream: localStream,
       isSpeaker: Boolean(currentUserId && effectiveSpeakerId && currentUserId === effectiveSpeakerId)
     },
-    ...remoteEntries.map(([remotePeerId, stream]) => {
-      const participant = participantsByPeerId[remotePeerId];
-      const participantUserId = normalizeId(participant?.userId);
-      return {
-        key: `peer-${remotePeerId}`,
-        userId: participantUserId,
-        name: participant?.username || `Peer ${remotePeerId.slice(0, 6)}`,
-        isYou: false,
-        isHostTile: Boolean(participant?.isHost || (participantUserId && participantUserId === currentHostId)),
-        stream,
-        isSpeaker: Boolean(participantUserId && effectiveSpeakerId && participantUserId === effectiveSpeakerId)
-      };
-    })
+    ...Object.entries(participantsByPeerId)
+      .filter(([pid]) => pid !== localPeerId)
+      .map(([remotePeerId, participant]) => {
+        const participantUserId = normalizeId(participant?.userId);
+        return {
+          key: `peer-${remotePeerId}`,
+          userId: participantUserId,
+          name: participant?.username || `Peer ${remotePeerId.slice(0, 6)}`,
+          isYou: false,
+          isHostTile: Boolean(participant?.isHost || (participantUserId && participantUserId === currentHostId)),
+          stream: remoteStreams[remotePeerId] || null,
+          isSpeaker: Boolean(participantUserId && effectiveSpeakerId && participantUserId === effectiveSpeakerId)
+        };
+      })
   ];
 
   function toggleSpeakerMenu(tileKey) {
