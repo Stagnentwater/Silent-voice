@@ -346,6 +346,10 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       if (!resolvedPeerId || resolvedPeerId === peerIdRef.current) {
         return;
       }
+
+      connectToPeer(resolvedPeerId).catch(() => {
+        cleanupPeer(resolvedPeerId);
+      });
     });
 
     client.on('peer-left', ({ peerId: targetPeerId }) => {

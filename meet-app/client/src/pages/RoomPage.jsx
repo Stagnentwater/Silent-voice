@@ -400,9 +400,15 @@ export function RoomPage() {
     return participant?.userId && effectiveSpeakerId && participant.userId === effectiveSpeakerId;
   })?.[0] || null;
 
-  const featuredSpeakerStream = effectiveSpeakerId
-    ? effectiveSpeakerId === user?.id ? localStream : speakerPeerId ? remoteStreams[speakerPeerId] : localStream
+  const primarySpeakerStream = effectiveSpeakerId
+    ? effectiveSpeakerId === user?.id
+      ? localStream
+      : speakerPeerId
+        ? remoteStreams[speakerPeerId]
+        : null
     : localStream;
+
+  const featuredSpeakerStream = primarySpeakerStream || localStream;
 
   const featuredSpeakerName = effectiveSpeakerId
     ? effectiveSpeakerId === user?.id ? user?.username || 'You' : speakerLabel
@@ -430,7 +436,7 @@ export function RoomPage() {
         isSpeaker: Boolean(participant?.userId && effectiveSpeakerId && participant.userId === effectiveSpeakerId)
       };
     })
-  ].filter((tile) => !tile.isSpeaker);
+  ].filter((tile) => !(tile.isSpeaker && primarySpeakerStream));
 
   function toggleSpeakerMenu(tileKey) {
     setSpeakerMenuFor((current) => (current === tileKey ? '' : tileKey));
