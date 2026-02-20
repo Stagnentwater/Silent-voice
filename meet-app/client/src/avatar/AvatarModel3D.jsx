@@ -12,7 +12,7 @@ import {
 } from './poseToBonesMap.js';
 
 const GLB_PATH = '/connor_rk900_-_detroit_become_human.glb';
-const TARGET_FRAME_MS = 100; // ~10 fps, matches PoseRenderer2D
+const TARGET_FRAME_MS = 200; // ~5 fps, 2× slower signing speed
 
 // ─── Coordinate conversion ───────────────────────────────────────────────────
 // MediaPipe: x-right, y-down, z-toward-camera (all 0-1 normalised)

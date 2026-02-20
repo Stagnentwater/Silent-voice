@@ -55,7 +55,7 @@ const FACE_CONNECTIONS = [
   ...pathToConnections([168, 6, 197, 195, 5, 4, 1, 19, 94, 2, 98, 327], false)
 ];
 
-const TARGET_FRAME_MS = 100; // ~10fps
+const TARGET_FRAME_MS = 200; // ~5fps (2× slower)
 const LANDMARK_BG = '#000000';
 const LANDMARK_STROKE = '#00ff55';
 const LANDMARK_STROKE_SOFT = '#66ff99';
