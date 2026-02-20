@@ -149,7 +149,8 @@ export function RoomPage() {
   const currentSpeakerId = normalizeId(speakerId);
   const currentHostId = normalizeId(hostId);
 
-  const isCurrentSpeaker = Boolean(currentUserId && currentSpeakerId && currentUserId === currentSpeakerId);
+  const effectiveSpeakerId = currentSpeakerId || currentUserId || null;
+  const isCurrentSpeaker = Boolean(currentUserId && effectiveSpeakerId && currentUserId === effectiveSpeakerId);
   const speech = useSpeechToPose({
     poseClient,
     speakerId: user?.id,
@@ -411,8 +412,6 @@ export function RoomPage() {
     : currentUserId === currentSpeakerId
       ? user?.username || 'You'
       : Object.values(participantsByPeerId).find((p) => normalizeId(p?.userId) === currentSpeakerId)?.username || 'assigned';
-
-  const effectiveSpeakerId = currentSpeakerId || null;
 
   const speakerPeerId = remoteEntries.find(([pid]) => {
     const participant = participantsByPeerId[pid];

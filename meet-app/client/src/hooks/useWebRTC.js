@@ -52,6 +52,9 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
   const pendingJoinRef = useRef(null);
   const iceServers = useMemo(parseIceServers, []);
 
+  const onPosePacketRef = useRef(onPosePacket);
+  useEffect(() => { onPosePacketRef.current = onPosePacket; }, [onPosePacket]);
+
   const settlePendingJoin = useCallback((resolver, payloadOrError) => {
     if (!pendingJoinRef.current) {
       return;
@@ -166,8 +169,8 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
   const attachDataChannel = useCallback((targetPeerId, channel) => {
     channel.onmessage = (event) => {
       const decoded = decodePosePacket(event.data);
-      if (decoded && onPosePacket) {
-        onPosePacket(decoded);
+      if (decoded && onPosePacketRef.current) {
+        onPosePacketRef.current(decoded);
       }
     };
     channel.onopen = () => {
@@ -176,12 +179,26 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
     channel.onclose = () => {
       dataChannelsRef.current.delete(targetPeerId);
     };
-  }, [onPosePacket]);
+  }, []);
 
   const createPeerConnection = useCallback((targetPeerId, initiator) => {
     const existing = peersRef.current.get(targetPeerId);
     if (existing) {
-      return existing;
+      const state = existing.connectionState;
+      if (state !== 'closed' && state !== 'failed') {
+        return existing;
+      }
+      // Tear down stale/dead connection before creating a fresh one
+      existing.onicecandidate = null;
+      existing.ontrack = null;
+      existing.ondatachannel = null;
+      existing.onconnectionstatechange = null;
+      try { existing.close(); } catch { /* already closed */ }
+      peersRef.current.delete(targetPeerId);
+      dataChannelsRef.current.delete(targetPeerId);
+      makingOfferRef.current.delete(targetPeerId);
+      ignoreOfferRef.current.delete(targetPeerId);
+      pendingCandidatesRef.current.delete(targetPeerId);
     }
 
     const peerConnection = new RTCPeerConnection({ iceServers });
@@ -213,31 +230,32 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
     };
 
     peerConnection.ontrack = (event) => {
-      const [incoming] = event.streams;
-      const streamTracks = incoming ? incoming.getTracks() : [];
       const track = event.track;
+      if (!track) return;
 
-      upsertRemoteStreamTracks(targetPeerId, [...streamTracks, track]);
+      setRemoteStreams((current) => {
+        const existing = current[targetPeerId];
+        const nextStream = new MediaStream(existing ? existing.getTracks() : []);
 
-      if (track) {
-        track.onended = () => {
-          setRemoteStreams((current) => {
-            const existing = current[targetPeerId];
-            if (!existing) {
-              return current;
-            }
+        // Replace existing track of the same kind instead of accumulating duplicates
+        nextStream.getTracks().forEach((t) => {
+          if (t.kind === track.kind) {
+            nextStream.removeTrack(t);
+          }
+        });
 
-            const remainingTracks = existing
-              .getTracks()
-              .filter((existingTrack) => existingTrack.id !== track.id && existingTrack.readyState === 'live');
+        nextStream.addTrack(track);
+        return { ...current, [targetPeerId]: nextStream };
+      });
 
-            return {
-              ...current,
-              [targetPeerId]: new MediaStream(remainingTracks)
-            };
-          });
-        };
-      }
+      track.onended = () => {
+        setRemoteStreams((current) => {
+          const existing = current[targetPeerId];
+          if (!existing) return current;
+          const remaining = existing.getTracks().filter((t) => t.id !== track.id && t.readyState === 'live');
+          return { ...current, [targetPeerId]: new MediaStream(remaining) };
+        });
+      };
     };
 
     peerConnection.onconnectionstatechange = () => {
@@ -292,7 +310,7 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
 
     peersRef.current.set(targetPeerId, peerConnection);
     return peerConnection;
-  }, [attachDataChannel, cleanupPeer, clearFailedCleanupTimer, iceServers, upsertRemoteStreamTracks]);
+  }, [attachDataChannel, cleanupPeer, clearFailedCleanupTimer, iceServers]);
 
   const connectToPeer = useCallback(async (targetPeerId) => {
     if (!targetPeerId || targetPeerId === peerIdRef.current) {
@@ -458,8 +476,8 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
     });
 
     client.on('POSE_PACKET', ({ packet }) => {
-      if (packet?.type === 'pose-sequence' && onPosePacket) {
-        onPosePacket(packet);
+      if (packet?.type === 'pose-sequence' && onPosePacketRef.current) {
+        onPosePacketRef.current(packet);
       }
     });
 

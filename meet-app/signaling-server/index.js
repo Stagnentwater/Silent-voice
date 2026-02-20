@@ -193,14 +193,18 @@ wss.on('connection', (ws, req) => {
         speakerId: room.speakerId
       });
 
-      broadcastRoom(room, {
-        type: 'peer-joined',
-        participant: {
-          peerId: currentPeerId,
-          userId,
-          username,
-          isHost
-        }
+      // Notify existing peers about the new participant (skip self)
+      room.clients.forEach((client) => {
+        if (client.peerId === currentPeerId) return;
+        send(client.ws, {
+          type: 'peer-joined',
+          participant: {
+            peerId: currentPeerId,
+            userId,
+            username,
+            isHost
+          }
+        });
       });
 
       return;
