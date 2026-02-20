@@ -554,31 +554,21 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
 
     setConnectionState('connecting');
 
-    const providedStream = options?.initialStream || null;
-    let stream = providedStream;
+    let stream = null;
     const supportsGetUserMedia =
       typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getUserMedia);
 
-    if (!stream) {
-      if (!supportsGetUserMedia) {
-        setConnectionState('error');
-        throw new Error('Camera and microphone are unavailable in this browser context.');
-      }
-
+    if (supportsGetUserMedia) {
       try {
         stream = await navigator.mediaDevices.getUserMedia({
           audio: true,
           video: true
         });
       } catch {
-        setConnectionState('error');
-        throw new Error('Unable to access camera and microphone. Please check permissions and device usage.');
+        stream = new MediaStream();
       }
-    }
-
-    if (!stream || stream.getTracks().length === 0) {
-      setConnectionState('error');
-      throw new Error('No media tracks available. Join cancelled to prevent black video/audio.');
+    } else {
+      stream = new MediaStream();
     }
 
     const audioEnabled = options?.audioEnabled ?? true;
@@ -623,24 +613,15 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       };
     });
 
-    try {
-      client.send('join-room', {
-        roomId,
-        peerId: peerId || undefined,
-        userId: options?.userId || undefined,
-        username: options?.username || undefined,
-        hostId: options?.hostId || undefined
-      });
+    client.send('join-room', {
+      roomId,
+      peerId: peerId || undefined,
+      userId: options?.userId || undefined,
+      username: options?.username || undefined,
+      hostId: options?.hostId || undefined
+    });
 
-      await joinAck;
-    } catch (error) {
-      if (!providedStream && stream) {
-        stream.getTracks().forEach((track) => track.stop());
-      }
-      localStreamRef.current = null;
-      setLocalStream(null);
-      throw error;
-    }
+    await joinAck;
   }, [ensureSignaling, peerId, settlePendingJoin]);
 
   const setSpeaker = useCallback((nextSpeakerId) => {
