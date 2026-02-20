@@ -113,33 +113,39 @@ function getWordAtTime(packet, elapsedMs) {
 }
 
 // ─── Bone rotation helpers ───────────────────────────────────────────────────
-const _up   = new THREE.Vector3(0, 1, 0);
 const _dir  = new THREE.Vector3();
-const _q    = new THREE.Quaternion();
-const _pInv = new THREE.Quaternion();
 const _m4   = new THREE.Matrix4();
 
-/** Local-space quaternion that rotates bone +Y toward (lm[to] - lm[from]). */
-function segmentQuat(lmArray, fromIdx, toIdx, bone) {
+/**
+ * Compute the local-space quaternion that drives `bone` so its segment
+ * (lm[from] → lm[to]) aligns with the corresponding landmark direction.
+ *
+ * Uses the bone's REST world direction (captured at load time) as the
+ * reference axis — NOT the generic +Y — so T-pose bones that point
+ * sideways (arms) or downward (legs) stay correct.
+ *
+ * entry = { bone, restQuat, restWorldDir, parentRestWorldQuat }
+ */
+function segmentQuat(lmArray, fromIdx, toIdx, entry) {
   const lmF = lmArray[fromIdx];
   const lmT = lmArray[toIdx];
   if (!lmF || !lmT) return null;
 
-  const vF = mpToV3(lmF);
-  const vT = mpToV3(lmT);
-  _dir.subVectors(vT, vF);
+  _dir.subVectors(mpToV3(lmT), mpToV3(lmF));
   if (_dir.lengthSq() < 1e-8) return null;
   _dir.normalize();
 
-  _q.setFromUnitVectors(_up, _dir);
+  // World-space delta: rotate bone's rest direction → target direction
+  const worldDelta = new THREE.Quaternion().setFromUnitVectors(
+    entry.restWorldDir,
+    _dir
+  );
 
-  if (bone.parent) {
-    bone.parent.updateWorldMatrix(true, false);
-    _m4.extractRotation(bone.parent.matrixWorld);
-    _pInv.setFromRotationMatrix(_m4).invert();
-    _q.premultiply(_pInv);
-  }
-  return _q.clone();
+  // Convert world delta to local space:
+  //   localQ = inv(parentRestWorldQ) * worldDelta * restWorldQ
+  // This yields the new local quaternion (not a delta on top of restQuat).
+  const parentInv = entry.parentRestWorldQuat.clone().invert();
+  return parentInv.multiply(worldDelta).multiply(entry.restWorldQuat);
 }
 
 /**
@@ -226,6 +232,36 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
 
     console.log('[AvatarModel3D] all GLB bones:', Object.keys(allBones).sort());
 
+    // ── Helper: build a full bone entry with rest-pose world data ────────
+    function makeBoneEntry(bone) {
+      bone.updateWorldMatrix(true, false);
+
+      // World quaternion of this bone in rest pose
+      const restWorldQuat = new THREE.Quaternion().setFromRotationMatrix(
+        _m4.extractRotation(bone.matrixWorld)
+      );
+
+      // World quaternion of parent in rest pose
+      let parentRestWorldQuat = new THREE.Quaternion(); // identity
+      if (bone.parent) {
+        bone.parent.updateWorldMatrix(true, false);
+        parentRestWorldQuat.setFromRotationMatrix(
+          _m4.extractRotation(bone.parent.matrixWorld)
+        );
+      }
+
+      // Direction the bone points in world space in rest pose (+Y in local)
+      const restWorldDir = new THREE.Vector3(0, 1, 0).applyQuaternion(restWorldQuat);
+
+      return {
+        bone,
+        restQuat: bone.quaternion.clone(),
+        restWorldQuat,
+        parentRestWorldQuat,
+        restWorldDir,
+      };
+    }
+
     const segBones = {};
     const allSegments = [
       ...BODY_SEGMENTS,
@@ -235,18 +271,18 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
     allSegments.forEach(({ boneName }) => {
       const bone = resolveBoneName(boneName, allBones);
       if (bone) {
-        segBones[boneName] = { bone, restQuat: bone.quaternion.clone() };
+        segBones[boneName] = makeBoneEntry(bone);
       } else {
         console.warn(`[AvatarModel3D] not found: "${boneName}"`);
       }
     });
     segmentBonesRef.current = segBones;
 
-    const headBone = resolveBoneName(FACE_BONE_NAMES.head, allBones);
-    const jawBone  = resolveBoneName(FACE_BONE_NAMES.jaw,  allBones);
+    const headBoneObj = resolveBoneName(FACE_BONE_NAMES.head, allBones);
+    const jawBoneObj  = FACE_BONE_NAMES.jaw ? resolveBoneName(FACE_BONE_NAMES.jaw, allBones) : null;
     faceBoneRef.current = {
-      head: headBone ? { bone: headBone, restQuat: headBone.quaternion.clone() } : null,
-      jaw:  jawBone  ? { bone: jawBone,  restQuat: jawBone.quaternion.clone()  } : null,
+      head: headBoneObj ? makeBoneEntry(headBoneObj) : null,
+      jaw:  jawBoneObj  ? makeBoneEntry(jawBoneObj)  : null,
     };
   }, [scene]);
 
@@ -296,66 +332,57 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
     const rightLm = frame.right_hand_landmarks;
     const faceLm  = frame.face_landmarks;
 
-    // ── Body / limbs ────────────────────────────────────────────────────
-    if (isLmSet(poseLm)) {
-      BODY_SEGMENTS.forEach(({ boneName, from, to }) => {
-        const entry2 = segBones[boneName];
-        if (!entry2) return;
-        const { bone, restQuat } = entry2;
-        const q = segmentQuat(poseLm, from, to, bone);
-        bone.quaternion.slerp(q ?? restQuat, q ? 0.35 : 0.06);
+    // ── Reusable segment driver ─────────────────────────────────────────
+    function driveSegments(lmArray, segments, alpha) {
+      segments.forEach(({ boneName, from, to }) => {
+        const e = segBones[boneName];
+        if (!e) return;
+        const q = segmentQuat(lmArray, from, to, e);
+        e.bone.quaternion.slerp(q ?? e.restQuat, q ? alpha : 0.06);
       });
+    }
+
+    function driftToRest(segments) {
+      segments.forEach(({ boneName }) => {
+        const e = segBones[boneName];
+        if (e) e.bone.quaternion.slerp(e.restQuat, 0.06);
+      });
+    }
+
+    // ── Body / upper limbs ──────────────────────────────────────────────
+    if (isLmSet(poseLm)) {
+      driveSegments(poseLm, BODY_SEGMENTS, 0.25);
+    } else {
+      driftToRest(BODY_SEGMENTS);
     }
 
     // ── Left fingers ────────────────────────────────────────────────────
     if (isLmSet(leftLm)) {
-      LEFT_HAND_SEGMENTS.forEach(({ boneName, from, to }) => {
-        const entry2 = segBones[boneName];
-        if (!entry2) return;
-        const { bone, restQuat } = entry2;
-        const q = segmentQuat(leftLm, from, to, bone);
-        bone.quaternion.slerp(q ?? restQuat, q ? 0.5 : 0.06);
-      });
+      driveSegments(leftLm, LEFT_HAND_SEGMENTS, 0.5);
     } else {
-      // No hand data — drift fingers to rest
-      LEFT_HAND_SEGMENTS.forEach(({ boneName }) => {
-        const entry2 = segBones[boneName];
-        if (entry2) entry2.bone.quaternion.slerp(entry2.restQuat, 0.06);
-      });
+      driftToRest(LEFT_HAND_SEGMENTS);
     }
 
     // ── Right fingers ───────────────────────────────────────────────────
     if (isLmSet(rightLm)) {
-      RIGHT_HAND_SEGMENTS.forEach(({ boneName, from, to }) => {
-        const entry2 = segBones[boneName];
-        if (!entry2) return;
-        const { bone, restQuat } = entry2;
-        const q = segmentQuat(rightLm, from, to, bone);
-        bone.quaternion.slerp(q ?? restQuat, q ? 0.5 : 0.06);
-      });
+      driveSegments(rightLm, RIGHT_HAND_SEGMENTS, 0.5);
     } else {
-      RIGHT_HAND_SEGMENTS.forEach(({ boneName }) => {
-        const entry2 = segBones[boneName];
-        if (entry2) entry2.bone.quaternion.slerp(entry2.restQuat, 0.06);
-      });
+      driftToRest(RIGHT_HAND_SEGMENTS);
     }
 
     // ── Head rotation from face mesh ────────────────────────────────────
     if (isLmSet(faceLm)) {
       if (faceBones.head) {
-        const { bone, restQuat } = faceBones.head;
-        const q = faceHeadQuat(faceLm, bone);
-        bone.quaternion.slerp(q ?? restQuat, q ? 0.3 : 0.06);
+        const e = faceBones.head;
+        const q = faceHeadQuat(faceLm, e.bone);
+        e.bone.quaternion.slerp(q ?? e.restQuat, q ? 0.3 : 0.06);
       }
-
-      // ── Jaw (mouth open/close) ─────────────────────────────────────
       if (faceBones.jaw) {
-        const { bone } = faceBones.jaw;
-        const q = faceJawQuat(faceLm, faceBones.jaw.restQuat);
-        bone.quaternion.slerp(q, 0.4);
+        const e = faceBones.jaw;
+        const q = faceJawQuat(faceLm, e.restQuat);
+        e.bone.quaternion.slerp(q, 0.4);
       }
     } else {
-      // No face data — restore head/jaw to rest
       if (faceBones.head) faceBones.head.bone.quaternion.slerp(faceBones.head.restQuat, 0.06);
       if (faceBones.jaw)  faceBones.jaw.bone.quaternion.slerp(faceBones.jaw.restQuat,  0.06);
     }

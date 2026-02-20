@@ -9,42 +9,23 @@
  *   face_landmarks       – 468 face-mesh points
  */
 
-// ─── Body / spine / limb segments (source: pose_landmarks, 33 pts) ───────────
-// MediaPipe pose indices:
-//  0 nose   11 L-shoulder  12 R-shoulder  13 L-elbow   14 R-elbow
-// 15 L-wrist 16 R-wrist   17 L-pinky     18 R-pinky   19 L-index  20 R-index
-// 23 L-hip  24 R-hip      25 L-knee      26 R-knee
-// 27 L-ankle 28 R-ankle   31 L-foot      32 R-foot
+// ─── Upper-body segments only (source: pose_landmarks, 33 pts) ──────────────
+// We only have pose data for upper body, so lower body stays in rest T-pose.
+// MediaPipe pose indices used:
+//  0 nose  11 L-shoulder  12 R-shoulder  13 L-elbow   14 R-elbow
+// 15 L-wrist  16 R-wrist
 
 export const BODY_SEGMENTS = [
-  // Torso
-  { boneName: 'mixamorigHips_01',      from: 23, to: 24 }, // L-hip → R-hip
-  { boneName: 'mixamorigSpine_02',     from: 23, to: 12 }, // L-hip → R-shoulder
-  { boneName: 'mixamorigSpine1_03',    from: 23, to: 12 }, // duplicate drive for mid-spine
-  { boneName: 'mixamorigSpine2_04',    from: 11, to: 12 }, // L-shoulder → R-shoulder
-  { boneName: 'mixamorigNeck_05',      from: 12, to: 0  }, // R-shoulder → nose
-
   // Left arm
-  { boneName: 'mixamorigLeftShoulder_08',  from: 11, to: 13 },
-  { boneName: 'mixamorigLeftArm_09',       from: 11, to: 13 },
-  { boneName: 'mixamorigLeftForeArm_010',  from: 13, to: 15 },
-  { boneName: 'mixamorigLeftHand_011',     from: 15, to: 19 }, // wrist → index knuckle
+  { boneName: 'mixamorigLeftArm_09',      from: 11, to: 13 },
+  { boneName: 'mixamorigLeftForeArm_010', from: 13, to: 15 },
 
   // Right arm
-  { boneName: 'mixamorigRightShoulder_032', from: 12, to: 14 },
-  { boneName: 'mixamorigRightArm_033',      from: 12, to: 14 },
-  { boneName: 'mixamorigRightForeArm_034',  from: 14, to: 16 },
-  { boneName: 'mixamorigRightHand_035',     from: 16, to: 20 }, // wrist → index knuckle
+  { boneName: 'mixamorigRightArm_033',     from: 12, to: 14 },
+  { boneName: 'mixamorigRightForeArm_034', from: 14, to: 16 },
 
-  // Left leg
-  { boneName: 'mixamorigLeftUpLeg_055',  from: 23, to: 25 },
-  { boneName: 'mixamorigLeftLeg_056',    from: 25, to: 27 },
-  { boneName: 'mixamorigLeftFoot_057',   from: 27, to: 31 },
-
-  // Right leg
-  { boneName: 'mixamorigRightUpLeg_060', from: 24, to: 26 },
-  { boneName: 'mixamorigRightLeg_061',   from: 26, to: 28 },
-  { boneName: 'mixamorigRightFoot_062',  from: 28, to: 32 },
+  // Neck
+  { boneName: 'mixamorigNeck_05', from: 12, to: 0 },
 ];
 
 // ─── Left hand finger segments (source: left_hand_landmarks, 21 pts) ─────────
