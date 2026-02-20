@@ -7,14 +7,14 @@ import { AvatarModel3D } from '../avatar/AvatarModel3D.jsx';
 const MODE_2D = '2d';
 const MODE_3D = '3d';
 
-function ThreeScene({ posePacket }) {
+function ThreeScene({ posePacket, onWordChange }) {
   return (
     <Canvas camera={{ position: [0, 0.8, 3.5], fov: 50 }} style={{ width: '100%', height: '100%' }}>
       <ambientLight intensity={0.7} />
       <directionalLight position={[2, 4, 3]} intensity={1.3} castShadow />
       <Suspense fallback={null}>
         <Environment preset="city" />
-        <AvatarModel3D posePacket={posePacket} />
+        <AvatarModel3D posePacket={posePacket} onWordChange={onWordChange} />
       </Suspense>
       <OrbitControls enablePan={false} minDistance={1.5} maxDistance={7} target={[0, 0.5, 0]} />
     </Canvas>
@@ -25,6 +25,7 @@ export function AvatarCanvas({ latestPosePacket, displayText = '', compact = fal
   const canvasRef   = useRef(null);
   const rendererRef = useRef(null);
   const [mode, setMode] = useState(MODE_2D);
+  const [activeWord, setActiveWord] = useState('');
 
   // ── 2D renderer lifecycle ──────────────────────────────────────────────
   useEffect(() => {
@@ -51,6 +52,11 @@ export function AvatarCanvas({ latestPosePacket, displayText = '', compact = fal
       rendererRef.current.queuePoseSequence(latestPosePacket);
     }
   }, [latestPosePacket, mode]);
+
+  // ── Reset active word when a new packet arrives ──────────────────────
+  useEffect(() => {
+    setActiveWord('');
+  }, [latestPosePacket]);
 
   const toggleMode = useCallback(() => {
     setMode((prev) => (prev === MODE_2D ? MODE_3D : MODE_2D));
@@ -82,7 +88,9 @@ export function AvatarCanvas({ latestPosePacket, displayText = '', compact = fal
     </button>
   );
 
-  const caption = displayText
+  // In 3D mode show the word currently being animated; fall back to full text
+  const captionText = (mode === MODE_3D && activeWord) ? activeWord : displayText;
+  const caption = captionText
     ? (
       <div
         className="avatar-caption"
@@ -95,7 +103,7 @@ export function AvatarCanvas({ latestPosePacket, displayText = '', compact = fal
           pointerEvents: 'none',
         }}
       >
-        {displayText}
+        {captionText}
       </div>
     )
     : null;
@@ -113,7 +121,7 @@ export function AvatarCanvas({ latestPosePacket, displayText = '', compact = fal
       />
 
       {/* 3D scene — only mounted in 3D mode */}
-      {mode === MODE_3D && <ThreeScene posePacket={latestPosePacket} />}
+      {mode === MODE_3D && <ThreeScene posePacket={latestPosePacket} onWordChange={setActiveWord} />}
 
       {caption}
     </div>

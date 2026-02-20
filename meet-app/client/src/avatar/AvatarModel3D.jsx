@@ -26,17 +26,34 @@ function mpToV3(lm) {
 }
 
 // ─── Landmark interpolation ──────────────────────────────────────────────────
+/** Accepts both dense Array and sparse-object landmark sets. */
+function isLmSet(lm) { return lm != null && typeof lm === 'object'; }
+
+function lerpPt(a, b, t) {
+  if (!a || !b) return a || b || null;
+  return {
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+    z: (a.z ?? 0) + ((b.z ?? 0) - (a.z ?? 0)) * t,
+  };
+}
+
+/**
+ * Lerp two landmark sets — handles both dense Array and the sparse-object
+ * format { "0": pt, "11": pt, ... } that poseApi/poseChannel produce.
+ */
 function lerpArr(a, b, t) {
-  if (!a || !b || a.length !== b.length) return a || b || null;
-  return a.map((lA, i) => {
-    const lB = b[i];
-    if (!lA || !lB) return lA || lB;
-    return {
-      x: lA.x + (lB.x - lA.x) * t,
-      y: lA.y + (lB.y - lA.y) * t,
-      z: (lA.z ?? 0) + ((lB.z ?? 0) - (lA.z ?? 0)) * t,
-    };
+  if (!a || !b) return a || b || null;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.map((lA, i) => lerpPt(lA, b[i], t) ?? lA);
+  }
+  // Sparse object — iterate keys of `a`, look up same key in `b`
+  const out = {};
+  Object.keys(a).forEach((k) => {
+    const r = lerpPt(a[k], b ? b[k] : null, t);
+    if (r) out[k] = r;
   });
+  return out;
 }
 
 function lerpFrame(a, b, t) {
@@ -74,6 +91,25 @@ function getFrameAtTime(packet, elapsedMs) {
     }
   }
   return frames[frames.length - 1];
+}
+
+/** Return the current word string based on elapsed playback time. */
+function getWordAtTime(packet, elapsedMs) {
+  const words = (packet.text || '').trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return '';
+
+  const timings = packet.timings;
+  const totalMs = Array.isArray(timings) && timings.length
+    ? timings[timings.length - 1]
+    : words.length * TARGET_FRAME_MS * 5;
+
+  if (totalMs <= 0 || elapsedMs >= totalMs) return words[words.length - 1];
+
+  const idx = Math.min(
+    Math.floor((elapsedMs / totalMs) * words.length),
+    words.length - 1
+  );
+  return words[idx] || '';
 }
 
 // ─── Bone rotation helpers ───────────────────────────────────────────────────
@@ -166,7 +202,7 @@ function faceJawQuat(faceLm, jawRestQuat) {
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
-export function AvatarModel3D({ posePacket }) {
+export function AvatarModel3D({ posePacket, onWordChange }) {
   const { scene } = useGLTF(GLB_PATH);
 
   // All segment bones: { boneName: { bone, restQuat } }
@@ -176,6 +212,7 @@ export function AvatarModel3D({ posePacket }) {
 
   // Sequence tracking
   const packetRef   = useRef(null); // { packet, startMs }
+  const lastWordRef = useRef('');   // last word emitted to avoid redundant calls
 
   // ── Discover bones on load ─────────────────────────────────────────────
   useEffect(() => {
@@ -217,6 +254,7 @@ export function AvatarModel3D({ posePacket }) {
   useEffect(() => {
     if (posePacket) {
       packetRef.current = { packet: posePacket, startMs: null };
+      lastWordRef.current = ''; // reset word tracking for new packet
     }
   }, [posePacket]);
 
@@ -240,8 +278,18 @@ export function AvatarModel3D({ posePacket }) {
     // Record sequence start on first frame after new packet
     if (entry.startMs === null) entry.startMs = nowMs;
 
-    const frame = getFrameAtTime(entry.packet, nowMs - entry.startMs);
+    const elapsed = nowMs - entry.startMs;
+    const frame = getFrameAtTime(entry.packet, elapsed);
     if (!frame) return;
+
+    // ── Emit current word as animation progresses ──────────────────────
+    if (onWordChange) {
+      const word = getWordAtTime(entry.packet, elapsed);
+      if (word !== lastWordRef.current) {
+        lastWordRef.current = word;
+        onWordChange(word);
+      }
+    }
 
     const poseLm  = frame.pose_landmarks;
     const leftLm  = frame.left_hand_landmarks;
@@ -249,7 +297,7 @@ export function AvatarModel3D({ posePacket }) {
     const faceLm  = frame.face_landmarks;
 
     // ── Body / limbs ────────────────────────────────────────────────────
-    if (Array.isArray(poseLm)) {
+    if (isLmSet(poseLm)) {
       BODY_SEGMENTS.forEach(({ boneName, from, to }) => {
         const entry2 = segBones[boneName];
         if (!entry2) return;
@@ -260,7 +308,7 @@ export function AvatarModel3D({ posePacket }) {
     }
 
     // ── Left fingers ────────────────────────────────────────────────────
-    if (Array.isArray(leftLm) && leftLm.length >= 21) {
+    if (isLmSet(leftLm)) {
       LEFT_HAND_SEGMENTS.forEach(({ boneName, from, to }) => {
         const entry2 = segBones[boneName];
         if (!entry2) return;
@@ -277,7 +325,7 @@ export function AvatarModel3D({ posePacket }) {
     }
 
     // ── Right fingers ───────────────────────────────────────────────────
-    if (Array.isArray(rightLm) && rightLm.length >= 21) {
+    if (isLmSet(rightLm)) {
       RIGHT_HAND_SEGMENTS.forEach(({ boneName, from, to }) => {
         const entry2 = segBones[boneName];
         if (!entry2) return;
@@ -293,7 +341,7 @@ export function AvatarModel3D({ posePacket }) {
     }
 
     // ── Head rotation from face mesh ────────────────────────────────────
-    if (Array.isArray(faceLm) && faceLm.length >= 468) {
+    if (isLmSet(faceLm)) {
       if (faceBones.head) {
         const { bone, restQuat } = faceBones.head;
         const q = faceHeadQuat(faceLm, bone);
