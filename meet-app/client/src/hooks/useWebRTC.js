@@ -7,21 +7,6 @@ import {
 } from '../services/poseChannel.js';
 
 const DEFAULT_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
-const WEBRTC_DIAG_PREFIX = '[WebRTC-DIAG]';
-
-function summarizeTrack(track) {
-  if (!track) {
-    return null;
-  }
-
-  return {
-    id: track.id,
-    kind: track.kind,
-    enabled: track.enabled,
-    muted: track.muted,
-    readyState: track.readyState
-  };
-}
 
 function parseIceServers() {
   const fromEnv = import.meta.env.VITE_ICE_SERVERS;
@@ -71,10 +56,6 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
     const { timeoutId } = pendingJoinRef.current;
     clearTimeout(timeoutId);
     pendingJoinRef.current = null;
-    console.log(WEBRTC_DIAG_PREFIX, 'settlePendingJoin', {
-      resolvedWithError: payloadOrError instanceof Error,
-      value: payloadOrError instanceof Error ? payloadOrError.message : payloadOrError
-    });
     resolver(payloadOrError);
   }, []);
 
@@ -82,11 +63,6 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
     const validTracks = tracks.filter((track) => track && track.readyState === 'live');
 
     if (!validTracks.length) {
-      console.warn(WEBRTC_DIAG_PREFIX, 'upsertRemoteStreamTracks: no live tracks', {
-        targetPeerId,
-        incomingCount: tracks.length,
-        incoming: tracks.map((track) => summarizeTrack(track))
-      });
       return;
     }
 
@@ -102,13 +78,6 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
         }
       });
 
-      console.log(WEBRTC_DIAG_PREFIX, 'upsertRemoteStreamTracks: updated stream', {
-        targetPeerId,
-        hadExisting: Boolean(existing),
-        incoming: validTracks.map((track) => summarizeTrack(track)),
-        finalTracks: nextStream.getTracks().map((track) => summarizeTrack(track))
-      });
-
       return {
         ...current,
         [targetPeerId]: nextStream
@@ -117,12 +86,6 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
   }, []);
 
   const cleanupPeer = useCallback((targetPeerId) => {
-    console.warn(WEBRTC_DIAG_PREFIX, 'cleanupPeer', {
-      targetPeerId,
-      hadPeerConnection: peersRef.current.has(targetPeerId),
-      hadDataChannel: dataChannelsRef.current.has(targetPeerId)
-    });
-
     const connection = peersRef.current.get(targetPeerId);
     if (connection) {
       connection.onicecandidate = null;
@@ -163,19 +126,9 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       }
     };
     channel.onopen = () => {
-      console.log(WEBRTC_DIAG_PREFIX, 'data channel open', {
-        targetPeerId,
-        label: channel.label,
-        readyState: channel.readyState
-      });
       dataChannelsRef.current.set(targetPeerId, channel);
     };
     channel.onclose = () => {
-      console.warn(WEBRTC_DIAG_PREFIX, 'data channel closed', {
-        targetPeerId,
-        label: channel.label,
-        readyState: channel.readyState
-      });
       dataChannelsRef.current.delete(targetPeerId);
     };
   }, [onPosePacket]);
@@ -183,18 +136,8 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
   const createPeerConnection = useCallback((targetPeerId, initiator) => {
     const existing = peersRef.current.get(targetPeerId);
     if (existing) {
-      console.log(WEBRTC_DIAG_PREFIX, 'createPeerConnection: reusing existing', {
-        targetPeerId,
-        initiator
-      });
       return existing;
     }
-
-    console.log(WEBRTC_DIAG_PREFIX, 'createPeerConnection: creating', {
-      targetPeerId,
-      initiator,
-      iceServers
-    });
 
     const peerConnection = new RTCPeerConnection({ iceServers });
 
@@ -209,25 +152,12 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       localStreamRef.current.getTracks().forEach((track) => {
         peerConnection.addTrack(track, localStreamRef.current);
       });
-      console.log(WEBRTC_DIAG_PREFIX, 'createPeerConnection: added local tracks', {
-        targetPeerId,
-        localTracks: localStreamRef.current.getTracks().map((track) => summarizeTrack(track))
-      });
-    } else {
-      console.warn(WEBRTC_DIAG_PREFIX, 'createPeerConnection: localStream missing', {
-        targetPeerId
-      });
     }
 
     peerConnection.onicecandidate = (event) => {
       if (!event.candidate || !signalingClientRef.current) {
         return;
       }
-      console.log(WEBRTC_DIAG_PREFIX, 'onicecandidate', {
-        targetPeerId,
-        candidateType: event.candidate.type,
-        sdpMid: event.candidate.sdpMid
-      });
       signalingClientRef.current.send('signal', {
         roomId: roomIdRef.current,
         targetPeerId,
@@ -240,13 +170,6 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       const [incoming] = event.streams;
       const streamTracks = incoming ? incoming.getTracks() : [];
       const track = event.track;
-
-      console.log(WEBRTC_DIAG_PREFIX, 'ontrack', {
-        targetPeerId,
-        track: summarizeTrack(track),
-        incomingStreamTrackCount: streamTracks.length,
-        incomingStreamTracks: streamTracks.map((item) => summarizeTrack(item))
-      });
 
       upsertRemoteStreamTracks(targetPeerId, [...streamTracks, track]);
 
@@ -261,12 +184,6 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
             const remainingTracks = existing
               .getTracks()
               .filter((existingTrack) => existingTrack.id !== track.id && existingTrack.readyState === 'live');
-
-            console.warn(WEBRTC_DIAG_PREFIX, 'remote track ended', {
-              targetPeerId,
-              endedTrack: summarizeTrack(track),
-              remainingTracks: remainingTracks.map((item) => summarizeTrack(item))
-            });
 
             if (!remainingTracks.length) {
               const next = { ...current };
@@ -285,22 +202,9 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
 
     peerConnection.onconnectionstatechange = () => {
       const state = peerConnection.connectionState;
-      console.log(WEBRTC_DIAG_PREFIX, 'connection state changed', {
-        targetPeerId,
-        state,
-        iceConnectionState: peerConnection.iceConnectionState,
-        signalingState: peerConnection.signalingState
-      });
       if (state === 'failed' || state === 'closed') {
         cleanupPeer(targetPeerId);
       }
-    };
-
-    peerConnection.oniceconnectionstatechange = () => {
-      console.log(WEBRTC_DIAG_PREFIX, 'ice connection state changed', {
-        targetPeerId,
-        iceConnectionState: peerConnection.iceConnectionState
-      });
     };
 
     peerConnection.ondatachannel = (event) => {
@@ -322,19 +226,9 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
   }, [attachDataChannel, cleanupPeer, iceServers, upsertRemoteStreamTracks]);
 
   const connectToPeer = useCallback(async (targetPeerId) => {
-    console.log(WEBRTC_DIAG_PREFIX, 'connectToPeer: start', {
-      targetPeerId,
-      roomId: roomIdRef.current,
-      fromPeerId: peerIdRef.current
-    });
     const peerConnection = createPeerConnection(targetPeerId, true);
     const offer = await peerConnection.createOffer();
     await peerConnection.setLocalDescription(offer);
-
-    console.log(WEBRTC_DIAG_PREFIX, 'connectToPeer: offer created', {
-      targetPeerId,
-      type: peerConnection.localDescription?.type
-    });
 
     signalingClientRef.current?.send('signal', {
       roomId: roomIdRef.current,
@@ -348,11 +242,6 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
   }, [createPeerConnection]);
 
   const leaveRoom = useCallback(() => {
-    console.log(WEBRTC_DIAG_PREFIX, 'leaveRoom', {
-      roomId: roomIdRef.current,
-      peerId: peerIdRef.current,
-      remotePeerCount: peersRef.current.size
-    });
     if (signalingClientRef.current && roomIdRef.current) {
       signalingClientRef.current.send('leave-room', {
         roomId: roomIdRef.current,
@@ -387,20 +276,9 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
     }
 
     const client = new SignalingClient(signalingUrl);
-    console.log(WEBRTC_DIAG_PREFIX, 'ensureSignaling: connect', {
-      signalingUrl
-    });
     client.connect();
 
     client.on('joined-room', ({ roomId, peerId: assignedPeerId, peers, participants: joinedParticipants, hostId: roomHostId, speakerId: roomSpeakerId }) => {
-      console.log(WEBRTC_DIAG_PREFIX, 'joined-room', {
-        roomId,
-        assignedPeerId,
-        peers,
-        participantsCount: (joinedParticipants || []).length,
-        hostId: roomHostId,
-        speakerId: roomSpeakerId
-      });
       const resolvedHostId =
         String(roomHostId || '').trim() ||
         String(hostHintRef.current || '').trim() ||
@@ -457,10 +335,6 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
     });
 
     client.on('peer-joined', ({ participant, peerId: targetPeerId }) => {
-      console.log(WEBRTC_DIAG_PREFIX, 'peer-joined', {
-        participant,
-        targetPeerId
-      });
       if (participant?.peerId) {
         setParticipants((current) => ({
           ...current,
@@ -479,16 +353,10 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
     });
 
     client.on('peer-left', ({ peerId: targetPeerId }) => {
-      console.warn(WEBRTC_DIAG_PREFIX, 'peer-left', {
-        targetPeerId
-      });
       cleanupPeer(targetPeerId);
     });
 
     client.on('SPEAKER_CHANGED', ({ speakerId: nextSpeakerId }) => {
-      console.log(WEBRTC_DIAG_PREFIX, 'SPEAKER_CHANGED', {
-        nextSpeakerId
-      });
       setSpeakerId(nextSpeakerId || null);
     });
 
@@ -499,10 +367,6 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
     });
 
     client.on('signal', async ({ fromPeerId, signal }) => {
-      console.log(WEBRTC_DIAG_PREFIX, 'signal received', {
-        fromPeerId,
-        type: signal?.type
-      });
       if (!fromPeerId || !signal) {
         return;
       }
@@ -519,7 +383,6 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
         const peerConnection = createPeerConnection(fromPeerId, initiator);
 
         if (signal.type === 'offer') {
-          console.log(WEBRTC_DIAG_PREFIX, 'processing offer', { fromPeerId });
           await peerConnection.setRemoteDescription(new RTCSessionDescription(signal.sdp));
           const answer = await peerConnection.createAnswer();
           await peerConnection.setLocalDescription(answer);
@@ -534,29 +397,16 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
             }
           });
         } else if (signal.type === 'answer') {
-          console.log(WEBRTC_DIAG_PREFIX, 'processing answer', { fromPeerId });
           await peerConnection.setRemoteDescription(new RTCSessionDescription(signal.sdp));
         } else if (signal.type === 'candidate' && signal.candidate) {
-          console.log(WEBRTC_DIAG_PREFIX, 'processing candidate', {
-            fromPeerId,
-            candidateType: signal.candidate.type
-          });
           await peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
         }
-      } catch (error) {
-        console.error(WEBRTC_DIAG_PREFIX, 'signal handling failed', {
-          fromPeerId,
-          type: signal?.type,
-          error
-        });
+      } catch {
         cleanupPeer(fromPeerId);
       }
     });
 
     client.on('error', ({ message }) => {
-      console.error(WEBRTC_DIAG_PREFIX, 'signaling error', {
-        message
-      });
       setConnectionState('error');
 
       if (pendingJoinRef.current) {
@@ -585,12 +435,6 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
 
     setConnectionState('connecting');
 
-    console.log(WEBRTC_DIAG_PREFIX, 'joinRoom: start', {
-      roomId,
-      options,
-      hasPendingJoin: Boolean(pendingJoinRef.current)
-    });
-
     let stream = null;
     const supportsGetUserMedia =
       typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices?.getUserMedia);
@@ -601,16 +445,10 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
           audio: true,
           video: true
         });
-        console.log(WEBRTC_DIAG_PREFIX, 'getUserMedia success', {
-          audioTracks: stream.getAudioTracks().map((track) => summarizeTrack(track)),
-          videoTracks: stream.getVideoTracks().map((track) => summarizeTrack(track))
-        });
       } catch {
-        console.error(WEBRTC_DIAG_PREFIX, 'getUserMedia failed: using empty MediaStream');
         stream = new MediaStream();
       }
     } else {
-      console.warn(WEBRTC_DIAG_PREFIX, 'getUserMedia unsupported: using empty MediaStream');
       stream = new MediaStream();
     }
 
@@ -646,10 +484,6 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
 
         pendingJoinRef.current = null;
         setConnectionState('error');
-        console.error(WEBRTC_DIAG_PREFIX, 'joinRoom: ack timeout', {
-          roomId,
-          timeoutMs: JOIN_ACK_TIMEOUT_MS
-        });
         reject(new Error('Signaling server did not confirm join. Please try again.'));
       }, JOIN_ACK_TIMEOUT_MS);
 
@@ -668,32 +502,13 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       hostId: options?.hostId || undefined
     });
 
-    console.log(WEBRTC_DIAG_PREFIX, 'joinRoom: join-room sent', {
-      roomId,
-      peerId: peerId || undefined,
-      userId: options?.userId || undefined,
-      username: options?.username || undefined,
-      hostId: options?.hostId || undefined
-    });
-
     await joinAck;
   }, [ensureSignaling, peerId, settlePendingJoin]);
 
   const setSpeaker = useCallback((nextSpeakerId) => {
     if (!signalingClientRef.current || !roomIdRef.current) {
-      console.warn(WEBRTC_DIAG_PREFIX, 'setSpeaker skipped: missing signaling/room', {
-        nextSpeakerId,
-        hasSignaling: Boolean(signalingClientRef.current),
-        roomId: roomIdRef.current
-      });
       return;
     }
-
-    console.log(WEBRTC_DIAG_PREFIX, 'setSpeaker', {
-      roomId: roomIdRef.current,
-      requesterUserId: currentUserRef.current.userId || undefined,
-      nextSpeakerId: nextSpeakerId || null
-    });
 
     setSpeakerId(nextSpeakerId || null);
 

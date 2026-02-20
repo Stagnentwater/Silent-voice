@@ -8,29 +8,6 @@ import { createPosePacket } from '../services/poseChannel.js';
 import { AvatarCanvas } from '../components/AvatarCanvas.jsx';
 import { POSE_SERVER_URL, SIGNALING_URL } from '../config/network.js';
 
-const ROOM_DIAG_PREFIX = '[RoomPage-DIAG]';
-
-function summarizeTrack(track) {
-  if (!track) return null;
-  return {
-    id: track.id,
-    kind: track.kind,
-    enabled: track.enabled,
-    muted: track.muted,
-    readyState: track.readyState
-  };
-}
-
-function summarizeStream(stream) {
-  if (!stream) return null;
-  return {
-    id: stream.id,
-    active: stream.active,
-    trackCount: stream.getTracks().length,
-    tracks: stream.getTracks().map((track) => summarizeTrack(track))
-  };
-}
-
 // StreamView — when showSpeakingBorder=true, analyses audio and writes
 // --spk-rms (0–1) onto the wrapper div so CSS can grow the white border.
 function StreamView({ stream, muted, showSpeakingBorder = false }) {
@@ -44,72 +21,15 @@ function StreamView({ stream, muted, showSpeakingBorder = false }) {
     const el = videoRef.current;
     if (!el) return undefined;
     el.srcObject = stream || null;
-    console.log(ROOM_DIAG_PREFIX, 'StreamView srcObject assigned', {
-      muted,
-      showSpeakingBorder,
-      stream: summarizeStream(stream)
-    });
-
-    const onLoadedMetadata = () => {
-      console.log(ROOM_DIAG_PREFIX, 'video loadedmetadata', {
-        muted,
-        readyState: el.readyState,
-        videoWidth: el.videoWidth,
-        videoHeight: el.videoHeight,
-        stream: summarizeStream(stream)
-      });
-    };
-
-    const onPlaying = () => {
-      console.log(ROOM_DIAG_PREFIX, 'video playing', {
-        muted,
-        readyState: el.readyState,
-        currentTime: el.currentTime,
-        stream: summarizeStream(stream)
-      });
-    };
-
-    const onError = () => {
-      console.error(ROOM_DIAG_PREFIX, 'video error event', {
-        muted,
-        mediaError: el.error,
-        stream: summarizeStream(stream)
-      });
-    };
-
-    const onStalled = () => {
-      console.warn(ROOM_DIAG_PREFIX, 'video stalled', {
-        muted,
-        readyState: el.readyState,
-        stream: summarizeStream(stream)
-      });
-    };
-
-    el.addEventListener('loadedmetadata', onLoadedMetadata);
-    el.addEventListener('playing', onPlaying);
-    el.addEventListener('error', onError);
-    el.addEventListener('stalled', onStalled);
-
     if (stream) {
       const playPromise = el.play();
       if (playPromise && typeof playPromise.catch === 'function') {
-        playPromise.catch((error) => {
-          console.warn(ROOM_DIAG_PREFIX, 'video play() rejected', {
-            muted,
-            error,
-            stream: summarizeStream(stream)
-          });
+        playPromise.catch(() => {
           // Browser may block autoplay until a user gesture; ignore and retry on next render/update.
         });
       }
     }
-    return () => {
-      el.removeEventListener('loadedmetadata', onLoadedMetadata);
-      el.removeEventListener('playing', onPlaying);
-      el.removeEventListener('error', onError);
-      el.removeEventListener('stalled', onStalled);
-      el.srcObject = null;
-    };
+    return () => { el.srcObject = null; };
   }, [stream]);
 
   useEffect(() => {
@@ -524,68 +444,9 @@ export function RoomPage() {
 
   function handleKeepSpeaker(nextSpeakerId) {
     if (!canAssignSpeaker || !nextSpeakerId) return;
-    console.log(ROOM_DIAG_PREFIX, 'handleKeepSpeaker', {
-      nextSpeakerId,
-      canAssignSpeaker,
-      currentSpeakerId: speakerId,
-      effectiveSpeakerId,
-      participantKeys: Object.keys(participantsByPeerId),
-      remoteStreamKeys: Object.keys(remoteStreams)
-    });
     setSpeaker(nextSpeakerId);
     setSpeakerMenuFor('');
   }
-
-  useEffect(() => {
-    console.log(ROOM_DIAG_PREFIX, 'live layout diagnostics', {
-      joinedRoom,
-      connectionState,
-      speakerId,
-      effectiveSpeakerId,
-      speakerPeerId,
-      participantsCount: Object.keys(participantsByPeerId).length,
-      participantKeys: Object.keys(participantsByPeerId),
-      remoteEntriesCount: remoteEntries.length,
-      remoteEntryKeys: remoteEntries.map(([remotePeerId]) => remotePeerId),
-      localStream: summarizeStream(localStream),
-      featuredSpeakerStream: summarizeStream(featuredSpeakerStream),
-      primarySpeakerStream: summarizeStream(primarySpeakerStream),
-      nonSpeakerTilesCount: nonSpeakerTiles.length,
-      nonSpeakerTiles: nonSpeakerTiles.map((tile) => ({
-        key: tile.key,
-        userId: tile.userId,
-        name: tile.name,
-        isSpeaker: tile.isSpeaker,
-        hasStream: Boolean(tile.stream),
-        stream: summarizeStream(tile.stream)
-      })),
-      probableCauses: {
-        remoteStreamsEmpty: remoteEntries.length === 0,
-        participantsEmpty: Object.keys(participantsByPeerId).length === 0,
-        speakerMappedButNoRemoteStream: Boolean(
-          effectiveSpeakerId &&
-          effectiveSpeakerId !== user?.id &&
-          speakerPeerId &&
-          !remoteStreams[speakerPeerId]
-        ),
-        nonSpeakerTilesEmpty: nonSpeakerTiles.length === 0
-      }
-    });
-  }, [
-    joinedRoom,
-    connectionState,
-    speakerId,
-    effectiveSpeakerId,
-    speakerPeerId,
-    participantsByPeerId,
-    remoteEntries,
-    localStream,
-    featuredSpeakerStream,
-    primarySpeakerStream,
-    nonSpeakerTiles,
-    remoteStreams,
-    user?.id
-  ]);
 
   return (
     <main className="room-live-shell">
