@@ -32,6 +32,22 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || defaultAllowedOrigins.joi
   .map((value) => normalizeOrigin(value))
   .filter(Boolean);
 
+const defaultAllowedOriginPatterns = ["^https://.*\\.vercel\\.app$"];
+const allowedOriginPatterns = (
+  process.env.ALLOWED_ORIGIN_PATTERNS || defaultAllowedOriginPatterns.join(",")
+)
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean)
+  .map((pattern) => {
+    try {
+      return new RegExp(pattern);
+    } catch {
+      return null;
+    }
+  })
+  .filter(Boolean);
+
 app.use(
   cors({
     origin(origin, callback) {
@@ -41,8 +57,15 @@ app.use(
       }
 
       const normalizedOrigin = normalizeOrigin(origin);
+      const matchesPattern = allowedOriginPatterns.some((pattern) =>
+        pattern.test(normalizedOrigin)
+      );
 
-      if (allowedOrigins.length === 0 || allowedOrigins.includes(normalizedOrigin)) {
+      if (
+        allowedOrigins.length === 0 ||
+        allowedOrigins.includes(normalizedOrigin) ||
+        matchesPattern
+      ) {
         callback(null, true);
         return;
       }

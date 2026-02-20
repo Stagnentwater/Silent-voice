@@ -9,11 +9,16 @@ async function request(path, payload, options = {}) {
     headers.Authorization = `Bearer ${options.token}`;
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(payload)
-  });
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload)
+    });
+  } catch {
+    throw new Error('Network error: unable to reach authentication server. Check API URL and CORS settings.');
+  }
 
   const data = await response.json().catch(() => ({}));
 
