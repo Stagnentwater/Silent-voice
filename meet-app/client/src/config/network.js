@@ -26,12 +26,12 @@ const wsOrigin = origin.replace(/^http/, 'ws');
 
 export const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ||
-  (isDev ? '' : `${networkContext.httpProtocol}://${networkContext.hostname}:3001`);
+  (isDev ? '' : origin);
 
 export const SIGNALING_URL =
   import.meta.env.VITE_SIGNALING_URL ||
-  (isDev ? `${wsOrigin}/ws` : `${networkContext.wsProtocol}://${networkContext.hostname}:8080`);
+  `${wsOrigin}/ws`;
 
 export const POSE_SERVER_URL =
   import.meta.env.VITE_POSE_SERVER_URL ||
-  (isDev ? '' : `${networkContext.httpProtocol}://${networkContext.hostname}:5000`);
+  (isDev ? '' : origin);

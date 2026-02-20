@@ -8,9 +8,28 @@ const roomRoutes = require("./routes/roomRoutes");
 const app = express();
 const port = Number(process.env.PORT || 3001);
 
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
+function normalizeOrigin(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return "";
+  }
+
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return raw.replace(/\/$/, "");
+  }
+}
+
+const defaultAllowedOrigins = [
+  "http://localhost:5173",
+  "https://localhost:5173",
+  "https://silent-voice-vc1h.vercel.app"
+];
+
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || defaultAllowedOrigins.join(","))
   .split(",")
-  .map((value) => value.trim())
+  .map((value) => normalizeOrigin(value))
   .filter(Boolean);
 
 app.use(
@@ -21,7 +40,9 @@ app.use(
         return;
       }
 
-      if (allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+      const normalizedOrigin = normalizeOrigin(origin);
+
+      if (allowedOrigins.length === 0 || allowedOrigins.includes(normalizedOrigin)) {
         callback(null, true);
         return;
       }
