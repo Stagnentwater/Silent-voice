@@ -112,9 +112,12 @@ function getWordAtTime(packet, elapsedMs) {
   return words[idx] || '';
 }
 
-// ─── Bone rotation helpers ───────────────────────────────────────────────────
+// ─── Pre-allocated temporaries ───────────────────────────────────────────────
 const _dir  = new THREE.Vector3();
 const _m4   = new THREE.Matrix4();
+const _pInv = new THREE.Quaternion(); // ← FIX: was missing, caused ReferenceError in faceHeadQuat
+
+// ─── Bone rotation helpers ───────────────────────────────────────────────────
 
 /**
  * Compute the local-space quaternion that drives `bone` so its segment
@@ -129,7 +132,10 @@ const _m4   = new THREE.Matrix4();
 function segmentQuat(lmArray, fromIdx, toIdx, entry) {
   const lmF = lmArray[fromIdx];
   const lmT = lmArray[toIdx];
-  if (!lmF || !lmT) return null;
+  if (!lmF || !lmT) {
+    console.warn(`[segmentQuat] missing landmark: from=${fromIdx}(${!!lmF}) to=${toIdx}(${!!lmT})`);
+    return null;
+  }
 
   _dir.subVectors(mpToV3(lmT), mpToV3(lmF));
   if (_dir.lengthSq() < 1e-8) return null;
@@ -143,7 +149,6 @@ function segmentQuat(lmArray, fromIdx, toIdx, entry) {
 
   // Convert world delta to local space:
   //   localQ = inv(parentRestWorldQ) * worldDelta * restWorldQ
-  // This yields the new local quaternion (not a delta on top of restQuat).
   const parentInv = entry.parentRestWorldQuat.clone().invert();
   return parentInv.multiply(worldDelta).multiply(entry.restWorldQuat);
 }
@@ -166,9 +171,9 @@ function faceHeadQuat(faceLm, headBone) {
   const vLft = mpToV3(lft);
   const vRgt = mpToV3(rgt);
 
-  const upDir    = vTop.clone().sub(vBot).normalize();           // chin → forehead = +Y
-  const rightDir = vRgt.clone().sub(vLft).normalize();           // left → right   = +X
-  const fwdDir   = upDir.clone().cross(rightDir).normalize();    // +Z
+  const upDir    = vTop.clone().sub(vBot).normalize();        // chin → forehead = +Y
+  const rightDir = vRgt.clone().sub(vLft).normalize();        // left → right   = +X
+  const fwdDir   = upDir.clone().cross(rightDir).normalize(); // +Z
 
   const m = new THREE.Matrix4();
   m.makeBasis(rightDir, upDir, fwdDir);
@@ -177,7 +182,7 @@ function faceHeadQuat(faceLm, headBone) {
   if (headBone.parent) {
     headBone.parent.updateWorldMatrix(true, false);
     _m4.extractRotation(headBone.parent.matrixWorld);
-    _pInv.setFromRotationMatrix(_m4).invert();
+    _pInv.setFromRotationMatrix(_m4).invert(); // ← now uses the declared _pInv
     worldQ.premultiply(_pInv);
   }
   return worldQ;
@@ -219,6 +224,9 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
   // Sequence tracking
   const packetRef   = useRef(null); // { packet, startMs }
   const lastWordRef = useRef('');   // last word emitted to avoid redundant calls
+
+  // Diagnostics: only log once per packet
+  const diagDoneRef = useRef(false);
 
   // ── Discover bones on load ─────────────────────────────────────────────
   useEffect(() => {
@@ -273,10 +281,11 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
       if (bone) {
         segBones[boneName] = makeBoneEntry(bone);
       } else {
-        console.warn(`[AvatarModel3D] not found: "${boneName}"`);
+        console.warn(`[AvatarModel3D] bone NOT found in GLB: "${boneName}"`);
       }
     });
     segmentBonesRef.current = segBones;
+    console.log('[AvatarModel3D] resolved segment bones:', Object.keys(segBones));
 
     const headBoneObj = resolveBoneName(FACE_BONE_NAMES.head, allBones);
     const jawBoneObj  = FACE_BONE_NAMES.jaw ? resolveBoneName(FACE_BONE_NAMES.jaw, allBones) : null;
@@ -284,13 +293,16 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
       head: headBoneObj ? makeBoneEntry(headBoneObj) : null,
       jaw:  jawBoneObj  ? makeBoneEntry(jawBoneObj)  : null,
     };
+    console.log('[AvatarModel3D] head bone:', headBoneObj?.name ?? 'NOT FOUND');
+    console.log('[AvatarModel3D] jaw bone:', jawBoneObj?.name ?? 'none');
   }, [scene]);
 
   // ── Track current packet + record start time ───────────────────────────
   useEffect(() => {
     if (posePacket) {
       packetRef.current = { packet: posePacket, startMs: null };
-      lastWordRef.current = ''; // reset word tracking for new packet
+      lastWordRef.current = '';
+      diagDoneRef.current = false; // reset so we log the new packet shape
     }
   }, [posePacket]);
 
@@ -312,7 +324,26 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
     }
 
     // Record sequence start on first frame after new packet
-    if (entry.startMs === null) entry.startMs = nowMs;
+    if (entry.startMs === null) {
+      entry.startMs = nowMs;
+    }
+
+    // ── One-time packet diagnostics ──────────────────────────────────────
+    if (!diagDoneRef.current) {
+      diagDoneRef.current = true;
+      const p = entry.packet;
+      console.log('[AvatarModel3D] packet keys:', Object.keys(p));
+      console.log('[AvatarModel3D] poseFrames count:', p.poseFrames?.length ?? 'MISSING — check backend shape');
+      const firstFrame = p.poseFrames?.[0];
+      if (firstFrame) {
+        const poseLmKeys = Object.keys(firstFrame.pose_landmarks ?? {});
+        console.log('[AvatarModel3D] pose_landmarks present:', poseLmKeys.length > 0, '| sample keys:', poseLmKeys.slice(0, 8));
+        console.log('[AvatarModel3D] left_hand_landmarks present:', !!firstFrame.left_hand_landmarks);
+        console.log('[AvatarModel3D] face_landmarks present:', !!firstFrame.face_landmarks);
+      } else {
+        console.warn('[AvatarModel3D] no first frame found — poseFrames may be empty or misnamed');
+      }
+    }
 
     const elapsed = nowMs - entry.startMs;
     const frame = getFrameAtTime(entry.packet, elapsed);
