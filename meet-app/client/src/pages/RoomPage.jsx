@@ -144,7 +144,12 @@ export function RoomPage() {
     onPosePacket: (packet) => setLatestPosePacket(packet)
   });
 
-  const isCurrentSpeaker = Boolean(user?.id && speakerId && user.id === speakerId);
+  const normalizeId = (value) => String(value ?? '').trim();
+  const currentUserId = normalizeId(user?.id);
+  const currentSpeakerId = normalizeId(speakerId);
+  const currentHostId = normalizeId(hostId);
+
+  const isCurrentSpeaker = Boolean(currentUserId && currentSpeakerId && currentUserId === currentSpeakerId);
   const speech = useSpeechToPose({
     poseClient,
     speakerId: user?.id,
@@ -394,60 +399,57 @@ export function RoomPage() {
   // ─── LIVE MEETING ─────────────────────────────────────────────────────────────
   const remoteEntries = Object.entries(remoteStreams);
   const participantsByPeerId = participants || {};
-  const isLocalUserHost = Boolean(user?.id && hostId && user.id === hostId);
+  const isLocalUserHost = Boolean(currentUserId && currentHostId && currentUserId === currentHostId);
   const canAssignSpeaker = Boolean(isHost || isLocalUserHost);
 
   const hostLabel = isLocalUserHost
     ? user?.username || 'You'
-    : Object.values(participantsByPeerId).find((p) => p?.userId === hostId)?.username || (hostId ? 'Host' : 'pending');
+    : Object.values(participantsByPeerId).find((p) => normalizeId(p?.userId) === currentHostId)?.username || (currentHostId ? 'Host' : 'pending');
 
-  const speakerLabel = !speakerId
+  const speakerLabel = !currentSpeakerId
     ? 'none'
-    : user?.id === speakerId
+    : currentUserId === currentSpeakerId
       ? user?.username || 'You'
-      : Object.values(participantsByPeerId).find((p) => p?.userId === speakerId)?.username || 'assigned';
+      : Object.values(participantsByPeerId).find((p) => normalizeId(p?.userId) === currentSpeakerId)?.username || 'assigned';
 
-  const effectiveSpeakerId = speakerId || user?.id || null;
+  const effectiveSpeakerId = currentSpeakerId || null;
 
   const speakerPeerId = remoteEntries.find(([pid]) => {
     const participant = participantsByPeerId[pid];
-    return participant?.userId && effectiveSpeakerId && participant.userId === effectiveSpeakerId;
+    return normalizeId(participant?.userId) === effectiveSpeakerId;
   })?.[0] || null;
 
-  const primarySpeakerStream = effectiveSpeakerId
-    ? effectiveSpeakerId === user?.id
+  const featuredSpeakerStream = !effectiveSpeakerId
+    ? localStream
+    : effectiveSpeakerId === currentUserId
       ? localStream
-      : speakerPeerId
-        ? remoteStreams[speakerPeerId]
-        : null
-    : localStream;
-
-  const featuredSpeakerStream = primarySpeakerStream || localStream;
+      : (speakerPeerId ? remoteStreams[speakerPeerId] : null);
 
   const featuredSpeakerName = effectiveSpeakerId
-    ? effectiveSpeakerId === user?.id ? user?.username || 'You' : speakerLabel
+    ? effectiveSpeakerId === currentUserId ? user?.username || 'You' : speakerLabel
     : user?.username || 'You';
 
   const participantTiles = [
     {
-      key: `self-${user?.id || 'me'}`,
-      userId: user?.id,
+      key: `self-${currentUserId || 'me'}`,
+      userId: currentUserId,
       name: user?.username || 'You',
       isYou: true,
       isHostTile: isLocalUserHost,
       stream: localStream,
-      isSpeaker: Boolean(user?.id && effectiveSpeakerId === user.id)
+      isSpeaker: Boolean(currentUserId && effectiveSpeakerId && currentUserId === effectiveSpeakerId)
     },
     ...remoteEntries.map(([remotePeerId, stream]) => {
       const participant = participantsByPeerId[remotePeerId];
+      const participantUserId = normalizeId(participant?.userId);
       return {
         key: `peer-${remotePeerId}`,
-        userId: participant?.userId,
+        userId: participantUserId,
         name: participant?.username || `Peer ${remotePeerId.slice(0, 6)}`,
         isYou: false,
-        isHostTile: Boolean(participant?.isHost),
+        isHostTile: Boolean(participant?.isHost || (participantUserId && participantUserId === currentHostId)),
         stream,
-        isSpeaker: Boolean(participant?.userId && effectiveSpeakerId && participant.userId === effectiveSpeakerId)
+        isSpeaker: Boolean(participantUserId && effectiveSpeakerId && participantUserId === effectiveSpeakerId)
       };
     })
   ];
