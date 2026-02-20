@@ -45,6 +45,10 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
   const peerIdRef = useRef('');
   const peersRef = useRef(new Map());
   const dataChannelsRef = useRef(new Map());
+  const makingOfferRef = useRef(new Map());
+  const ignoreOfferRef = useRef(new Map());
+  const pendingCandidatesRef = useRef(new Map());
+  const failedCleanupTimersRef = useRef(new Map());
   const pendingJoinRef = useRef(null);
   const iceServers = useMemo(parseIceServers, []);
 
@@ -85,7 +89,45 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
     });
   }, []);
 
+  const clearFailedCleanupTimer = useCallback((targetPeerId) => {
+    const timeoutId = failedCleanupTimersRef.current.get(targetPeerId);
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      failedCleanupTimersRef.current.delete(targetPeerId);
+    }
+  }, []);
+
+  const queuePendingCandidate = useCallback((targetPeerId, candidate) => {
+    const queue = pendingCandidatesRef.current.get(targetPeerId) || [];
+    queue.push(candidate);
+    pendingCandidatesRef.current.set(targetPeerId, queue);
+  }, []);
+
+  const flushPendingCandidates = useCallback(async (targetPeerId, peerConnection) => {
+    const queue = pendingCandidatesRef.current.get(targetPeerId);
+    if (!queue || !queue.length) {
+      return;
+    }
+
+    const retry = [];
+    for (const candidate of queue) {
+      try {
+        await peerConnection.addIceCandidate(candidate);
+      } catch {
+        retry.push(candidate);
+      }
+    }
+
+    if (retry.length) {
+      pendingCandidatesRef.current.set(targetPeerId, retry);
+    } else {
+      pendingCandidatesRef.current.delete(targetPeerId);
+    }
+  }, []);
+
   const cleanupPeer = useCallback((targetPeerId) => {
+    clearFailedCleanupTimer(targetPeerId);
+
     const connection = peersRef.current.get(targetPeerId);
     if (connection) {
       connection.onicecandidate = null;
@@ -104,6 +146,9 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
 
     peersRef.current.delete(targetPeerId);
     dataChannelsRef.current.delete(targetPeerId);
+    makingOfferRef.current.delete(targetPeerId);
+    ignoreOfferRef.current.delete(targetPeerId);
+    pendingCandidatesRef.current.delete(targetPeerId);
 
     setParticipants((current) => {
       const next = { ...current };
@@ -116,7 +161,7 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       delete next[targetPeerId];
       return next;
     });
-  }, []);
+  }, [clearFailedCleanupTimer]);
 
   const attachDataChannel = useCallback((targetPeerId, channel) => {
     channel.onmessage = (event) => {
@@ -202,7 +247,36 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
 
     peerConnection.onconnectionstatechange = () => {
       const state = peerConnection.connectionState;
-      if (state === 'failed' || state === 'closed') {
+
+      if (state === 'connected') {
+        clearFailedCleanupTimer(targetPeerId);
+        return;
+      }
+
+      if (state === 'failed' || state === 'disconnected') {
+        try {
+          peerConnection.restartIce();
+        } catch {
+          // no-op
+        }
+
+        if (!failedCleanupTimersRef.current.has(targetPeerId)) {
+          const timeoutId = setTimeout(() => {
+            failedCleanupTimersRef.current.delete(targetPeerId);
+            const connection = peersRef.current.get(targetPeerId);
+            const finalState = connection?.connectionState;
+            if (finalState === 'failed' || finalState === 'disconnected' || finalState === 'closed') {
+              cleanupPeer(targetPeerId);
+            }
+          }, 6000);
+
+          failedCleanupTimersRef.current.set(targetPeerId, timeoutId);
+        }
+
+        return;
+      }
+
+      if (state === 'closed') {
         cleanupPeer(targetPeerId);
       }
     };
@@ -223,22 +297,31 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
 
     peersRef.current.set(targetPeerId, peerConnection);
     return peerConnection;
-  }, [attachDataChannel, cleanupPeer, iceServers, upsertRemoteStreamTracks]);
+  }, [attachDataChannel, cleanupPeer, clearFailedCleanupTimer, iceServers, upsertRemoteStreamTracks]);
 
   const connectToPeer = useCallback(async (targetPeerId) => {
     const peerConnection = createPeerConnection(targetPeerId, true);
-    const offer = await peerConnection.createOffer();
-    await peerConnection.setLocalDescription(offer);
+    if (peerConnection.signalingState !== 'stable') {
+      return;
+    }
 
-    signalingClientRef.current?.send('signal', {
-      roomId: roomIdRef.current,
-      targetPeerId,
-      fromPeerId: peerIdRef.current || undefined,
-      signal: {
-        type: 'offer',
-        sdp: peerConnection.localDescription
-      }
-    });
+    makingOfferRef.current.set(targetPeerId, true);
+    try {
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+
+      signalingClientRef.current?.send('signal', {
+        roomId: roomIdRef.current,
+        targetPeerId,
+        fromPeerId: peerIdRef.current || undefined,
+        signal: {
+          type: 'offer',
+          sdp: peerConnection.localDescription
+        }
+      });
+    } finally {
+      makingOfferRef.current.set(targetPeerId, false);
+    }
   }, [createPeerConnection]);
 
   const leaveRoom = useCallback(() => {
@@ -381,9 +464,29 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       try {
         const initiator = false;
         const peerConnection = createPeerConnection(fromPeerId, initiator);
+        const polite = String(peerIdRef.current || '') > String(fromPeerId || '');
 
         if (signal.type === 'offer') {
+          const makingOffer = makingOfferRef.current.get(fromPeerId) === true;
+          const offerCollision = makingOffer || peerConnection.signalingState !== 'stable';
+          const shouldIgnoreOffer = !polite && offerCollision;
+          ignoreOfferRef.current.set(fromPeerId, shouldIgnoreOffer);
+
+          if (shouldIgnoreOffer) {
+            return;
+          }
+
+          if (offerCollision) {
+            try {
+              await peerConnection.setLocalDescription({ type: 'rollback' });
+            } catch {
+              // no-op
+            }
+          }
+
           await peerConnection.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+          await flushPendingCandidates(fromPeerId, peerConnection);
+
           const answer = await peerConnection.createAnswer();
           await peerConnection.setLocalDescription(answer);
 
@@ -397,9 +500,20 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
             }
           });
         } else if (signal.type === 'answer') {
+          ignoreOfferRef.current.set(fromPeerId, false);
           await peerConnection.setRemoteDescription(new RTCSessionDescription(signal.sdp));
+          await flushPendingCandidates(fromPeerId, peerConnection);
         } else if (signal.type === 'candidate' && signal.candidate) {
-          await peerConnection.addIceCandidate(new RTCIceCandidate(signal.candidate));
+          if (ignoreOfferRef.current.get(fromPeerId)) {
+            return;
+          }
+
+          const candidate = new RTCIceCandidate(signal.candidate);
+          if (peerConnection.remoteDescription?.type) {
+            await peerConnection.addIceCandidate(candidate);
+          } else {
+            queuePendingCandidate(fromPeerId, candidate);
+          }
         }
       } catch {
         cleanupPeer(fromPeerId);
@@ -419,7 +533,7 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
 
     signalingClientRef.current = client;
     return client;
-  }, [cleanupPeer, connectToPeer, createPeerConnection, settlePendingJoin, signalingUrl]);
+  }, [cleanupPeer, connectToPeer, createPeerConnection, flushPendingCandidates, queuePendingCandidate, settlePendingJoin, signalingUrl]);
 
   const joinRoom = useCallback(async (roomId, options = {}) => {
     if (!roomId) {
