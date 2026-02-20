@@ -10,26 +10,71 @@ import { AvatarCanvas } from '../components/AvatarCanvas.jsx';
 const SIGNALING_URL = import.meta.env.VITE_SIGNALING_URL || 'ws://localhost:8080';
 const POSE_SERVER_URL = import.meta.env.VITE_POSE_SERVER_URL || 'http://localhost:5000';
 
-function StreamView({ stream, muted }) {
+// StreamView — when showSpeakingBorder=true, analyses audio and writes
+// --spk-rms (0–1) onto the wrapper div so CSS can grow the white border.
+function StreamView({ stream, muted, showSpeakingBorder = false }) {
   const videoRef = useRef(null);
+  const audioCtxRef = useRef(null);
+  const rafRef = useRef(null);
+  const smoothRef = useRef(0);
+  const wrapRef = useRef(null);
 
   useEffect(() => {
-    const element = videoRef.current;
-    if (!element) {
-      return undefined;
-    }
-
-    element.srcObject = stream || null;
-    return () => {
-      element.srcObject = null;
-    };
+    const el = videoRef.current;
+    if (!el) return undefined;
+    el.srcObject = stream || null;
+    return () => { el.srcObject = null; };
   }, [stream]);
 
-  if (!stream) {
-    return <div className="room-live-placeholder">No video stream</div>;
-  }
+  useEffect(() => {
+    if (!showSpeakingBorder || !stream || muted) {
+      if (wrapRef.current) wrapRef.current.style.setProperty('--spk-rms', '0');
+      return undefined;
+    }
+    const ctx = new AudioContext();
+    audioCtxRef.current = ctx;
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.4;
+    const src = ctx.createMediaStreamSource(stream);
+    src.connect(analyser);
+    const samples = new Uint8Array(analyser.fftSize);
+    smoothRef.current = 0;
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) return;
+      analyser.getByteTimeDomainData(samples);
+      let total = 0;
+      for (let i = 0; i < samples.length; i++) {
+        const n = (samples[i] - 128) / 128;
+        total += n * n;
+      }
+      const raw = Math.sqrt(total / samples.length);
+      const alpha = raw > smoothRef.current ? 0.3 : 0.07;
+      smoothRef.current += alpha * (raw - smoothRef.current);
+      if (wrapRef.current) {
+        const val = Math.min(Math.pow(smoothRef.current * 6, 0.5), 1);
+        wrapRef.current.style.setProperty('--spk-rms', val.toFixed(4));
+      }
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    ctx.resume().then(() => { rafRef.current = requestAnimationFrame(tick); });
+    return () => {
+      cancelled = true;
+      if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
+      src.disconnect(); analyser.disconnect(); ctx.close();
+      audioCtxRef.current = null;
+      if (wrapRef.current) wrapRef.current.style.setProperty('--spk-rms', '0');
+    };
+  }, [showSpeakingBorder, stream, muted]);
 
-  return <video ref={videoRef} autoPlay playsInline muted={muted} />;
+  if (!stream) return <div className="room-live-placeholder">No stream</div>;
+
+  return (
+    <div ref={wrapRef} className={`stream-wrap${showSpeakingBorder ? ' stream-wrap--monitored' : ''}`}>
+      <video ref={videoRef} autoPlay playsInline muted={muted} />
+    </div>
+  );
 }
 
 export function RoomPage() {
@@ -52,16 +97,19 @@ export function RoomPage() {
   const [latestInterim, setLatestInterim] = useState('');
   const [speechError, setSpeechError] = useState('');
   const [speakerMenuFor, setSpeakerMenuFor] = useState('');
+
   const previewVideoRef = useRef(null);
   const audioContextRef = useRef(null);
   const audioFrameRef = useRef(null);
+  const waveShellRef = useRef(null);
+  const smoothedRmsRef = useRef(0);
+
   const poseClient = useMemo(() => createPoseClient(POSE_SERVER_URL), []);
 
   const {
     localStream,
     remoteStreams,
     participants,
-    peerId,
     joinedRoom,
     hostId,
     speakerId,
@@ -73,9 +121,7 @@ export function RoomPage() {
     sendPosePacket
   } = useWebRTC({
     signalingUrl: SIGNALING_URL,
-    onPosePacket: (packet) => {
-      setLatestPosePacket(packet);
-    }
+    onPosePacket: (packet) => setLatestPosePacket(packet)
   });
 
   const isCurrentSpeaker = Boolean(user?.id && speakerId && user.id === speakerId);
@@ -84,14 +130,7 @@ export function RoomPage() {
     poseClient,
     speakerId: user?.id,
     onPoseReady: ({ text, poseIds, poseFrames, timings, speakerId: packetSpeakerId }) => {
-      const packet = createPosePacket({
-        text,
-        poseIds,
-        poseFrames,
-        timings,
-        speakerId: packetSpeakerId
-      });
-
+      const packet = createPosePacket({ text, poseIds, poseFrames, timings, speakerId: packetSpeakerId });
       setLatestPosePacket(packet);
       sendPosePacket(packet);
     }
@@ -99,20 +138,12 @@ export function RoomPage() {
 
   async function handleJoinMeeting() {
     setError('');
-
-    if (!/^[A-Z0-9]{6}$/.test(normalizedRoomCode)) {
-      setError('Invalid room code.');
-      return;
-    }
-
+    if (!/^[A-Z0-9]{6}$/.test(normalizedRoomCode)) { setError('Invalid room code.'); return; }
     setConnecting(true);
     try {
       const roomMeta = await joinRoomApi({ roomCode: normalizedRoomCode });
       const resolvedUserId = String(user?.id || '').trim();
-      if (!resolvedUserId) {
-        throw new Error('Unable to identify current user');
-      }
-
+      if (!resolvedUserId) throw new Error('Unable to identify current user');
       await joinRealtimeRoom(normalizedRoomCode, {
         userId: resolvedUserId,
         username: user?.username,
@@ -120,11 +151,7 @@ export function RoomPage() {
         audioEnabled: !isMuted,
         videoEnabled: !isVideoOff
       });
-
-      if (previewStream) {
-        previewStream.getTracks().forEach((track) => track.stop());
-        setPreviewStream(null);
-      }
+      if (previewStream) { previewStream.getTracks().forEach((t) => t.stop()); setPreviewStream(null); }
     } catch (err) {
       setError(err.message || 'Unable to join meeting');
     } finally {
@@ -141,134 +168,87 @@ export function RoomPage() {
   const hasJoined = Boolean(joinedRoom);
 
   useEffect(() => {
-    if (hasJoined) {
-      return undefined;
-    }
-
+    if (hasJoined) return undefined;
     let active = true;
-
     async function loadPreview() {
       setMediaError('');
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: true
-        });
-
-        if (!active) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
-
-        stream.getAudioTracks().forEach((track) => {
-          track.enabled = !isMuted;
-        });
-        stream.getVideoTracks().forEach((track) => {
-          track.enabled = !isVideoOff;
-        });
-
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        if (!active) { stream.getTracks().forEach((t) => t.stop()); return; }
+        stream.getAudioTracks().forEach((t) => { t.enabled = !isMuted; });
+        stream.getVideoTracks().forEach((t) => { t.enabled = !isVideoOff; });
         setPreviewStream(stream);
       } catch {
         setMediaError('Camera access is required to preview before joining.');
       }
     }
-
     loadPreview();
-
-    return () => {
-      active = false;
-    };
+    return () => { active = false; };
   }, [hasJoined]);
 
   useEffect(() => {
-    if (!previewVideoRef.current || !previewStream) {
-      return;
-    }
-
+    if (!previewVideoRef.current || !previewStream) return;
     previewVideoRef.current.srcObject = previewStream;
   }, [previewStream]);
 
   useEffect(() => {
     if (!previewStream || isMuted || hasJoined) {
       setIsAudible(false);
+      if (waveShellRef.current) waveShellRef.current.style.setProperty('--rms', '0');
       return undefined;
     }
-
-    let cancelled = false;
     const audioContext = new AudioContext();
     audioContextRef.current = audioContext;
-
     const analyser = audioContext.createAnalyser();
     analyser.fftSize = 512;
-    analyser.smoothingTimeConstant = 0.75;
-
+    analyser.smoothingTimeConstant = 0.4;
     const source = audioContext.createMediaStreamSource(previewStream);
     source.connect(analyser);
-
     const samples = new Uint8Array(analyser.fftSize);
-
-    const detectSound = () => {
-      if (cancelled) {
-        return;
-      }
-
+    smoothedRmsRef.current = 0;
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) return;
       analyser.getByteTimeDomainData(samples);
       let total = 0;
-      for (let index = 0; index < samples.length; index += 1) {
-        const normalized = (samples[index] - 128) / 128;
-        total += normalized * normalized;
+      for (let i = 0; i < samples.length; i++) {
+        const n = (samples[i] - 128) / 128;
+        total += n * n;
       }
-
-      const rms = Math.sqrt(total / samples.length);
-      setIsAudible(rms > 0.03);
-      audioFrameRef.current = requestAnimationFrame(detectSound);
+      const rawRms = Math.sqrt(total / samples.length);
+      const alpha = rawRms > smoothedRmsRef.current ? 0.25 : 0.06;
+      smoothedRmsRef.current += alpha * (rawRms - smoothedRmsRef.current);
+      const rms = smoothedRmsRef.current;
+      setIsAudible(rms > 0.025);
+      if (waveShellRef.current) {
+        const curved = Math.pow(Math.min(rms * 5, 1), 0.55);
+        waveShellRef.current.style.setProperty('--rms', curved.toFixed(4));
+      }
+      audioFrameRef.current = requestAnimationFrame(tick);
     };
-
-    audioContext.resume().finally(() => {
-      audioFrameRef.current = requestAnimationFrame(detectSound);
-    });
-
+    audioContext.resume().then(() => { audioFrameRef.current = requestAnimationFrame(tick); });
     return () => {
       cancelled = true;
-      if (audioFrameRef.current) {
-        cancelAnimationFrame(audioFrameRef.current);
-        audioFrameRef.current = null;
-      }
-      source.disconnect();
-      analyser.disconnect();
-      audioContext.close();
+      if (audioFrameRef.current) { cancelAnimationFrame(audioFrameRef.current); audioFrameRef.current = null; }
+      source.disconnect(); analyser.disconnect(); audioContext.close();
       audioContextRef.current = null;
       setIsAudible(false);
+      if (waveShellRef.current) waveShellRef.current.style.setProperty('--rms', '0');
     };
   }, [hasJoined, isMuted, previewStream]);
 
   useEffect(() => () => {
-    if (audioFrameRef.current) {
-      cancelAnimationFrame(audioFrameRef.current);
-      audioFrameRef.current = null;
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
-    }
-    if (previewStream) {
-      previewStream.getTracks().forEach((track) => track.stop());
-    }
+    if (audioFrameRef.current) { cancelAnimationFrame(audioFrameRef.current); audioFrameRef.current = null; }
+    if (audioContextRef.current) { audioContextRef.current.close(); audioContextRef.current = null; }
+    if (previewStream) previewStream.getTracks().forEach((t) => t.stop());
   }, [previewStream]);
 
   function handleToggleMute() {
     setIsMuted((current) => {
       const nextMuted = !current;
       const activeStream = hasJoined ? localStream : previewStream;
-      if (activeStream) {
-        activeStream.getAudioTracks().forEach((track) => {
-          track.enabled = !nextMuted;
-        });
-      }
-      if (nextMuted && speech.listening) {
-        speech.stop();
-        setLatestInterim('');
-      }
+      if (activeStream) activeStream.getAudioTracks().forEach((t) => { t.enabled = !nextMuted; });
+      if (nextMuted && speech.listening) { speech.stop(); setLatestInterim(''); }
       return nextMuted;
     });
   }
@@ -277,106 +257,55 @@ export function RoomPage() {
     setIsVideoOff((current) => {
       const nextVideoOff = !current;
       const activeStream = hasJoined ? localStream : previewStream;
-      if (activeStream) {
-        activeStream.getVideoTracks().forEach((track) => {
-          track.enabled = !nextVideoOff;
-        });
-      }
+      if (activeStream) activeStream.getVideoTracks().forEach((t) => { t.enabled = !nextVideoOff; });
       return nextVideoOff;
     });
   }
 
   function handleBackToLanding() {
-    if (previewStream) {
-      previewStream.getTracks().forEach((track) => track.stop());
-      setPreviewStream(null);
-    }
+    if (previewStream) { previewStream.getTracks().forEach((t) => t.stop()); setPreviewStream(null); }
     navigate('/landing', { replace: true });
   }
 
   function handleStartSpeech() {
-    if (isMuted) {
-      setSpeechError('Unmute to start speech-to-sign.');
-      return;
-    }
-
-    if (!isCurrentSpeaker) {
-      setSpeechError('Only the current speaker can start speech-to-sign.');
-      return;
-    }
+    if (isMuted) { setSpeechError('Unmute to start speech-to-sign.'); return; }
+    if (!isCurrentSpeaker) { setSpeechError('Only the current speaker can start speech-to-sign.'); return; }
     setSpeechError('');
     speech.start();
   }
 
-  function handleStopSpeech() {
-    speech.stop();
-    setLatestInterim('');
-  }
+  function handleStopSpeech() { speech.stop(); setLatestInterim(''); }
 
-  useEffect(() => {
-    setLatestInterim(speech.interimText || '');
-  }, [speech.interimText]);
+  useEffect(() => { setLatestInterim(speech.interimText || ''); }, [speech.interimText]);
+  useEffect(() => { if (speech.lastError) setSpeechError(speech.lastError); }, [speech.lastError]);
+  useEffect(() => { if (!isCurrentSpeaker && speech.listening) { speech.stop(); setLatestInterim(''); } }, [isCurrentSpeaker, speech]);
+  useEffect(() => { if (isMuted && speech.listening) { speech.stop(); setLatestInterim(''); } }, [isMuted, speech]);
 
-  useEffect(() => {
-    if (speech.lastError) {
-      setSpeechError(speech.lastError);
-    }
-  }, [speech.lastError]);
-
-  useEffect(() => {
-    if (!isCurrentSpeaker && speech.listening) {
-      speech.stop();
-      setLatestInterim('');
-    }
-  }, [isCurrentSpeaker, speech]);
-
-  useEffect(() => {
-    if (isMuted && speech.listening) {
-      speech.stop();
-      setLatestInterim('');
-    }
-  }, [isMuted, speech]);
-
+  // ─── PRE-JOIN ─────────────────────────────────────────────────────────────────
   if (!hasJoined) {
     return (
       <main className="room-prejoin-shell">
         <div className="room-prejoin-strips" aria-hidden="true" />
-
-        <button type="button" className="room-prejoin-back" onClick={handleBackToLanding}>
-          ← Back
-        </button>
-
+        <button type="button" className="room-prejoin-back" onClick={handleBackToLanding}>← Back</button>
         <section className="room-prejoin-stage">
-          <div className={`room-prejoin-preview-shell ${isAudible && !isMuted ? 'is-audible' : ''}`}>
-            <span className="room-prejoin-wave room-prejoin-wave-1" aria-hidden="true" />
-            <span className="room-prejoin-wave room-prejoin-wave-2" aria-hidden="true" />
-            <span className="room-prejoin-wave room-prejoin-wave-3" aria-hidden="true" />
-
+          <div ref={waveShellRef} className={`room-prejoin-preview-shell ${isAudible && !isMuted ? 'is-audible' : ''}`}>
+            <span className="room-prejoin-wave" aria-hidden="true" />
             <div className="room-prejoin-preview">
-              {previewStream ? (
-                <video ref={previewVideoRef} autoPlay muted playsInline />
-              ) : (
-                <div className="room-prejoin-placeholder">Waiting for camera preview…</div>
-              )}
+              {previewStream
+                ? <video ref={previewVideoRef} autoPlay muted playsInline />
+                : <div className="room-prejoin-placeholder">Waiting for camera preview…</div>}
             </div>
           </div>
-
           <p className={`room-audio-indicator ${isMuted ? 'is-muted' : isAudible ? 'is-audible' : ''}`}>
             {isMuted ? 'Muted' : isAudible ? 'Audible' : 'Not audible'}
           </p>
-
           <div className="room-prejoin-controls">
-            <button type="button" onClick={handleToggleMute}>
-              {isMuted ? 'Unmute' : 'Mute'}
-            </button>
-            <button type="button" onClick={handleToggleVideo}>
-              {isVideoOff ? 'Open video' : 'Close video'}
-            </button>
+            <button type="button" onClick={handleToggleMute}>{isMuted ? 'Unmute' : 'Mute'}</button>
+            <button type="button" onClick={handleToggleVideo}>{isVideoOff ? 'Open video' : 'Close video'}</button>
             <button type="button" className="room-prejoin-join" onClick={handleJoinMeeting} disabled={connecting}>
               {connecting ? 'Joining…' : 'Join'}
             </button>
           </div>
-
           {error ? <p className="warning room-prejoin-warning">{error}</p> : null}
           {mediaError ? <p className="warning room-prejoin-warning">{mediaError}</p> : null}
         </section>
@@ -384,6 +313,7 @@ export function RoomPage() {
     );
   }
 
+  // ─── LIVE MEETING ─────────────────────────────────────────────────────────────
   const remoteEntries = Object.entries(remoteStreams);
   const participantsByPeerId = participants || {};
   const isLocalUserHost = Boolean(user?.id && hostId && user.id === hostId);
@@ -391,42 +321,36 @@ export function RoomPage() {
 
   const hostLabel = isLocalUserHost
     ? user?.username || 'You'
-    : Object.values(participantsByPeerId).find((participant) => participant?.userId === hostId)
-        ?.username || (hostId ? 'Host' : 'pending');
+    : Object.values(participantsByPeerId).find((p) => p?.userId === hostId)?.username || (hostId ? 'Host' : 'pending');
 
   const speakerLabel = !speakerId
     ? 'none'
     : user?.id === speakerId
       ? user?.username || 'You'
-      : Object.values(participantsByPeerId).find((participant) => participant?.userId === speakerId)
-          ?.username || 'assigned';
+      : Object.values(participantsByPeerId).find((p) => p?.userId === speakerId)?.username || 'assigned';
 
   const effectiveSpeakerId = speakerId || user?.id || null;
 
-  const speakerPeerId = remoteEntries.find(([peerId]) => {
-    const participant = participantsByPeerId[peerId];
+  const speakerPeerId = remoteEntries.find(([pid]) => {
+    const participant = participantsByPeerId[pid];
     return participant?.userId && effectiveSpeakerId && participant.userId === effectiveSpeakerId;
   })?.[0] || null;
 
   const featuredSpeakerStream = effectiveSpeakerId
-    ? effectiveSpeakerId === user?.id
-      ? localStream
-      : speakerPeerId
-        ? remoteStreams[speakerPeerId]
-        : localStream
+    ? effectiveSpeakerId === user?.id ? localStream : speakerPeerId ? remoteStreams[speakerPeerId] : localStream
     : localStream;
 
   const featuredSpeakerName = effectiveSpeakerId
-    ? effectiveSpeakerId === user?.id
-      ? `${user?.username || 'You'} (Speaker)`
-      : `${speakerLabel} (Speaker)`
-    : `${user?.username || 'You'} (Speaker)`;
+    ? effectiveSpeakerId === user?.id ? user?.username || 'You' : speakerLabel
+    : user?.username || 'You';
 
   const nonSpeakerTiles = [
     {
       key: `self-${user?.id || 'me'}`,
       userId: user?.id,
-      name: `${user?.username || 'You'}${isLocalUserHost ? ' (Host)' : ''}`,
+      name: user?.username || 'You',
+      isYou: true,
+      isHostTile: isLocalUserHost,
       stream: localStream,
       isSpeaker: Boolean(user?.id && effectiveSpeakerId === user.id)
     },
@@ -435,11 +359,11 @@ export function RoomPage() {
       return {
         key: `peer-${remotePeerId}`,
         userId: participant?.userId,
-        name: `${participant?.username || `Peer ${remotePeerId.slice(0, 6)}`}${participant?.isHost ? ' (Host)' : ''}`,
+        name: participant?.username || `Peer ${remotePeerId.slice(0, 6)}`,
+        isYou: false,
+        isHostTile: Boolean(participant?.isHost),
         stream,
-        isSpeaker: Boolean(
-          participant?.userId && effectiveSpeakerId && participant.userId === effectiveSpeakerId
-        )
+        isSpeaker: Boolean(participant?.userId && effectiveSpeakerId && participant.userId === effectiveSpeakerId)
       };
     })
   ].filter((tile) => !tile.isSpeaker);
@@ -449,123 +373,119 @@ export function RoomPage() {
   }
 
   function handleKeepSpeaker(nextSpeakerId) {
-    if (!canAssignSpeaker || !nextSpeakerId) {
-      return;
-    }
+    if (!canAssignSpeaker || !nextSpeakerId) return;
     setSpeaker(nextSpeakerId);
     setSpeakerMenuFor('');
   }
 
   return (
     <main className="room-live-shell">
-      <section className="room-live-stage">
-        <div className="room-live-meta">{joinedRoom}</div>
 
+      {/* ── Top bar ── */}
+      <header className="room-live-topbar">
+        <div className="room-live-topbar-left">
+          <span className="room-live-brand">◈ Session</span>
+          <span className="room-live-roomcode">{joinedRoom}</span>
+        </div>
+        <div className="room-live-topbar-right">
+          <span className={`room-live-dot ${connectionState === 'connected' ? 'room-live-dot--live' : ''}`} />
+          <span className="room-live-conn">{connectionState || 'connecting'}</span>
+        </div>
+      </header>
+
+      {/* ── Stage ── */}
+      <section className="room-live-stage">
+
+        {/* Featured row: speaker + avatar */}
         <div className="room-live-featured">
+
           <article className="room-live-feature-tile room-live-feature-speaker">
             <div className="room-live-media-wrap">
-              <button
-                type="button"
-                className="room-live-more"
-                onClick={() => toggleSpeakerMenu('featured-speaker')}
-                disabled={!canAssignSpeaker}
-                aria-label="Speaker options"
-              >
-                ⋮
-              </button>
-
+              <button type="button" className="room-live-more" onClick={() => toggleSpeakerMenu('featured-speaker')} disabled={!canAssignSpeaker} aria-label="Speaker options">⋮</button>
               {speakerMenuFor === 'featured-speaker' && canAssignSpeaker ? (
                 <div className="room-live-menu">
-                  <button
-                    type="button"
-                    onClick={() => handleKeepSpeaker(effectiveSpeakerId)}
-                    disabled={!effectiveSpeakerId || speakerId === effectiveSpeakerId}
-                  >
-                    Keep as speaker
-                  </button>
+                  <button type="button" onClick={() => handleKeepSpeaker(effectiveSpeakerId)} disabled={!effectiveSpeakerId || speakerId === effectiveSpeakerId}>Keep as speaker</button>
                 </div>
               ) : null}
-
-              <StreamView
-                stream={featuredSpeakerStream}
-                muted={effectiveSpeakerId === user?.id || !effectiveSpeakerId}
-              />
+              <StreamView stream={featuredSpeakerStream} muted={effectiveSpeakerId === user?.id || !effectiveSpeakerId} showSpeakingBorder />
             </div>
-            <p>{featuredSpeakerName}</p>
+            <div className="room-live-tile-footer">
+              <span className="room-live-tile-name">{featuredSpeakerName}</span>
+              <span className="room-live-badge room-live-badge--spk">● Speaking</span>
+            </div>
           </article>
 
           <article className="room-live-feature-tile room-live-avatar-tile">
             <div className="room-live-media-wrap room-live-avatar-media">
               <AvatarCanvas latestPosePacket={latestPosePacket} compact />
             </div>
-            <p>Sign Avatar</p>
+            <div className="room-live-tile-footer">
+              <span className="room-live-tile-name">Sign Avatar</span>
+            </div>
           </article>
         </div>
 
+        {/* Participant strip */}
         {nonSpeakerTiles.length ? (
           <div className="room-live-grid">
             {nonSpeakerTiles.map((tile) => (
               <article key={tile.key} className="room-live-tile">
                 <div className="room-live-media-wrap">
-                  <button
-                    type="button"
-                    className="room-live-more"
-                    onClick={() => toggleSpeakerMenu(tile.key)}
-                    disabled={!canAssignSpeaker}
-                    aria-label="Speaker options"
-                  >
-                    ⋮
-                  </button>
-
+                  <button type="button" className="room-live-more" onClick={() => toggleSpeakerMenu(tile.key)} disabled={!canAssignSpeaker} aria-label="Speaker options">⋮</button>
                   {speakerMenuFor === tile.key && canAssignSpeaker ? (
                     <div className="room-live-menu">
-                      <button
-                        type="button"
-                        onClick={() => handleKeepSpeaker(tile.userId)}
-                        disabled={!tile.userId || speakerId === tile.userId}
-                      >
-                        Keep as speaker
-                      </button>
+                      <button type="button" onClick={() => handleKeepSpeaker(tile.userId)} disabled={!tile.userId || speakerId === tile.userId}>Make speaker</button>
                     </div>
                   ) : null}
-
-                  <StreamView stream={tile.stream} muted={tile.userId === user?.id} />
+                  {/* Remote tiles get audio monitored; local tile is muted so no feedback loop */}
+                  <StreamView stream={tile.stream} muted={tile.isYou} showSpeakingBorder={!tile.isYou} />
                 </div>
-                <p>{tile.name}</p>
+                <div className="room-live-tile-footer">
+                  <span className="room-live-tile-name">{tile.name}</span>
+                  {tile.isHostTile && <span className="room-live-badge room-live-badge--host">Host</span>}
+                  {tile.isYou && <span className="room-live-badge room-live-badge--you">You</span>}
+                </div>
               </article>
             ))}
           </div>
         ) : null}
 
-        <div className="room-live-dock">
-          <button type="button" onClick={handleToggleMute}>
-            {isMuted ? 'Unmute' : 'Mute'}
+      </section>
+
+      {/* ── Dock ── */}
+      <footer className="room-live-dock">
+        <div className="room-live-dock-inner">
+          <button type="button" className={`dock-btn${isMuted ? ' dock-btn--warn' : ''}`} onClick={handleToggleMute}>
+            <span className="dock-icon">{isMuted ? '🔇' : '🎙'}</span>
+            <span>{isMuted ? 'Unmute' : 'Mute'}</span>
           </button>
-          <button type="button" onClick={handleToggleVideo}>
-            {isVideoOff ? 'Video on' : 'Video off'}
+          <button type="button" className={`dock-btn${isVideoOff ? ' dock-btn--warn' : ''}`} onClick={handleToggleVideo}>
+            <span className="dock-icon">{isVideoOff ? '📷' : '📷'}</span>
+            <span>{isVideoOff ? 'Start Video' : 'Stop Video'}</span>
           </button>
           {speech.listening ? (
-            <button type="button" onClick={handleStopSpeech} disabled={!isCurrentSpeaker}>
-              Stop sign
+            <button type="button" className="dock-btn dock-btn--sign" onClick={handleStopSpeech} disabled={!isCurrentSpeaker}>
+              <span className="dock-icon">🤟</span><span>Stop Sign</span>
             </button>
           ) : (
-            <button type="button" onClick={handleStartSpeech} disabled={!isCurrentSpeaker || isMuted}>
-              Start sign
+            <button type="button" className="dock-btn" onClick={handleStartSpeech} disabled={!isCurrentSpeaker || isMuted}>
+              <span className="dock-icon">🤟</span><span>Start Sign</span>
             </button>
           )}
-          <button type="button" className="room-live-leave" onClick={handleLeaveMeeting}>
-            Leave
+          <button type="button" className="dock-btn dock-btn--leave" onClick={handleLeaveMeeting}>
+            <span className="dock-icon">↩</span><span>Leave</span>
           </button>
         </div>
 
-        {latestInterim ? <p className="room-live-interim">{latestInterim}</p> : null}
-        {speechError ? <p className="room-live-warning warning">{speechError}</p> : null}
-        {error ? <p className="room-live-warning warning">{error}</p> : null}
+        {latestInterim ? <p className="room-live-interim">"{latestInterim}"</p> : null}
+        {speechError ? <p className="room-live-warning">{speechError}</p> : null}
+        {error ? <p className="room-live-warning">{error}</p> : null}
 
-        <p className="room-live-footer">
-          {connectionState || 'connecting'} • Host: {hostLabel} • Speaker: {speakerLabel}
+        <p className="room-live-footer-meta">
+          Host: <strong>{hostLabel}</strong>&ensp;·&ensp;Speaker: <strong>{speakerLabel}</strong>
         </p>
-      </section>
+      </footer>
+
     </main>
   );
 }

@@ -396,12 +396,8 @@ button.danger {
 }
 
 @keyframes auth-stripes-flow {
-  from {
-    background-position: 0 0;
-  }
-  to {
-    background-position: -240px 240px;
-  }
+  from { background-position: 0 0; }
+  to { background-position: -240px 240px; }
 }
 
 @media (max-width: 960px) {
@@ -462,6 +458,10 @@ button.danger {
   }
 }
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   PRE-JOIN
+───────────────────────────────────────────────────────────────────────────── */
+
 .room-shell {
   max-width: 1200px;
   margin: 0 auto;
@@ -518,35 +518,16 @@ button.danger {
   place-items: center;
 }
 
+/* Single voice-reactive wave — JS writes --rms, box-shadow width grows */
 .room-prejoin-wave {
   position: absolute;
-  inset: -14px;
-  border-radius: 18px;
-  border: 3px solid rgba(20, 20, 20, 0);
-  opacity: 0;
-  transform: scale(1);
+  inset: 0;
+  border-radius: 14px;
   pointer-events: none;
-}
-
-.room-prejoin-wave-2 {
-  inset: -22px;
-}
-
-.room-prejoin-wave-3 {
-  inset: -30px;
-}
-
-.room-prejoin-preview-shell.is-audible .room-prejoin-wave {
-  border-color: rgba(20, 20, 20, 0.55);
-  animation: room-sound-wave 1.25s ease-out infinite;
-}
-
-.room-prejoin-preview-shell.is-audible .room-prejoin-wave-2 {
-  animation-delay: 0.22s;
-}
-
-.room-prejoin-preview-shell.is-audible .room-prejoin-wave-3 {
-  animation-delay: 0.44s;
+  box-shadow:
+    0 0 0 calc(var(--rms, 0) * 28px) rgba(20, 20, 20, calc(0.55 - var(--rms, 0) * 0.55)),
+    0 0 calc(var(--rms, 0) * 18px) calc(var(--rms, 0) * 10px) rgba(20, 20, 20, calc(0.2 - var(--rms, 0) * 0.2));
+  transition: box-shadow 0.22s ease-out;
 }
 
 .room-prejoin-preview {
@@ -581,13 +562,8 @@ button.danger {
   color: #6a6a6a;
 }
 
-.room-audio-indicator.is-muted {
-  color: #8f2f2f;
-}
-
-.room-audio-indicator.is-audible {
-  color: #141414;
-}
+.room-audio-indicator.is-muted { color: #8f2f2f; }
+.room-audio-indicator.is-audible { color: #141414; }
 
 .room-prejoin-controls {
   display: flex;
@@ -616,91 +592,143 @@ button.danger {
   color: #8f2f2f;
 }
 
-@keyframes room-sound-wave {
-  0% {
-    opacity: 0.8;
-    transform: scale(1);
-  }
-  100% {
-    opacity: 0;
-    transform: scale(1.08);
-  }
+/* ─────────────────────────────────────────────────────────────────────────────
+   LIVE ROOM — Classic dark theme
+   Speaking border: .stream-wrap--monitored uses --spk-rms (0–1) written by
+   StreamView's per-tile AudioContext loop. box-shadow spread grows as the
+   person speaks, fading to transparent at the outer edge.
+───────────────────────────────────────────────────────────────────────────── */
+
+/* Stream wrapper — sits inside every media-wrap */
+.stream-wrap {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
 }
 
+.stream-wrap--monitored {
+  /* Inner solid ring grows from 0 → 5px; outer glow adds soft gradient fade */
+  box-shadow:
+    0 0 0 calc(var(--spk-rms, 0) * 5px) rgba(255, 255, 255, calc(0.9 - var(--spk-rms, 0) * 0.1)),
+    0 0 calc(var(--spk-rms, 0) * 16px) calc(var(--spk-rms, 0) * 5px) rgba(255, 255, 255, calc(0.28 - var(--spk-rms, 0) * 0.26));
+  transition: box-shadow 0.12s ease-out;
+}
+
+.stream-wrap video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+/* Shell */
 .room-live-shell {
   position: fixed;
   inset: 0;
   height: 100dvh;
-  max-height: 100dvh;
-  background: radial-gradient(circle at top, #1c1e22 0%, #111317 46%, #0a0b0d 100%);
-  color: #f1f3f6;
-  padding: 18px;
+  background: #0c0c0e;
+  color: #e8e2d9;
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-rows: 48px 1fr auto;
+  overflow: hidden;
+  font-family: 'Georgia', 'Times New Roman', serif;
+}
+
+/* Top bar */
+.room-live-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 20px;
+  border-bottom: 1px solid #1e1c18;
+  background: #0e0e10;
+  flex-shrink: 0;
+}
+
+.room-live-topbar-left {
+  display: flex;
+  align-items: center;
   gap: 14px;
+}
+
+.room-live-brand {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: #c8b97a;
+}
+
+.room-live-roomcode {
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: #6b6555;
+  text-transform: uppercase;
+  font-family: 'Courier New', monospace;
+  border: 1px solid #2e2a20;
+  border-radius: 4px;
+  padding: 2px 8px;
+}
+
+.room-live-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.room-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #3a3830;
+}
+
+.room-live-dot--live {
+  background: #5c9e6e;
+  box-shadow: 0 0 6px #5c9e6e88;
+}
+
+.room-live-conn {
+  font-size: 11px;
+  color: #5a5648;
+  letter-spacing: 0.04em;
+  font-family: 'Courier New', monospace;
+}
+
+/* Stage */
+.room-live-stage {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  gap: 12px;
+  padding: 14px 16px 0;
+  min-height: 0;
   overflow: hidden;
 }
 
-.room-live-meta {
-  font-size: 13px;
-  color: #98a0ad;
-  text-align: center;
-}
-
-.room-live-grid {
-  display: flex;
-  flex-direction: row;
-  align-items: stretch;
-  gap: 10px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  padding: 2px 2px 10px;
-}
-
+/* Featured row: speaker + avatar */
 .room-live-featured {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
-  align-items: stretch;
+  min-height: 0;
 }
 
 .room-live-feature-tile {
-  margin: 0;
-  border: 1px solid #2d323b;
-  border-radius: 14px;
-  background: linear-gradient(180deg, #1c1f25 0%, #15181d 100%);
+  border: 1px solid #222018;
+  border-radius: 12px;
+  background: #111110;
   overflow: hidden;
   display: grid;
   grid-template-rows: 1fr auto;
-  gap: 0;
-  min-height: 240px;
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.34);
+  min-height: 0;
+  box-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 .room-live-feature-speaker {
-  box-shadow: 0 0 0 1px rgba(120, 131, 147, 0.4) inset;
-}
-
-.room-live-feature-tile p {
-  margin: 0;
-  font-size: 12px;
-  color: #d4d9e1;
-  padding: 8px 12px 10px;
-}
-
-.room-live-tile {
-  margin: 0;
-  border: 1px solid #2d323b;
-  border-radius: 12px;
-  background: #171a20;
-  overflow: hidden;
-  display: grid;
-  grid-template-rows: 1fr auto;
-  gap: 0;
-  position: relative;
-  flex: 0 0 220px;
-  min-width: 220px;
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.25);
+  border-color: #2c2820;
 }
 
 .room-live-media-wrap {
@@ -708,36 +736,64 @@ button.danger {
   width: 100%;
   aspect-ratio: 16 / 9;
   overflow: hidden;
-  background: #050607;
+  background: #080808;
 }
 
-.room-live-tile.is-speaker {
-  border-color: #4a525f;
-  box-shadow: 0 0 0 1px rgba(157, 171, 192, 0.45) inset;
-}
-
-.room-live-tile p {
-  margin: 0;
-  font-size: 11px;
-  color: #d4d9e1;
-  padding: 8px 10px 10px;
-}
-
-.room-live-avatar-tile {
-  padding: 8px;
+/* Tile footer label row */
+.room-live-tile-footer {
+  display: flex;
+  align-items: center;
   gap: 8px;
+  padding: 7px 12px 8px;
+  border-top: 1px solid #1c1a16;
+}
+
+.room-live-tile-name {
+  font-size: 12px;
+  color: #b8ae9a;
+  letter-spacing: 0.03em;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Badges */
+.room-live-badge {
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+  flex-shrink: 0;
+}
+
+.room-live-badge--spk {
+  background: #1e2e1e;
+  color: #6aaa7e;
+  border: 1px solid #2a3e2a;
+}
+
+.room-live-badge--host {
+  background: #2a2416;
+  color: #c8aa5a;
+  border: 1px solid #3a3018;
+}
+
+.room-live-badge--you {
+  background: #1a1e28;
+  color: #7a9ab8;
+  border: 1px solid #243040;
+}
+
+/* Avatar tile */
+.room-live-avatar-tile {
+  border-color: #1c1c1e;
 }
 
 .room-live-avatar-media {
-  background: #000000;
-}
-
-.avatar-tile-content {
-  width: 100%;
-  height: 100%;
-  border: 2px solid #111111;
-  border-radius: 10px;
-  overflow: hidden;
+  background: #050505;
 }
 
 .avatar-canvas.avatar-canvas-compact {
@@ -746,124 +802,185 @@ button.danger {
   min-height: 0;
   border: 0;
   border-radius: 0;
-  background: #000000;
+  background: #000;
 }
 
+/* Participant strip */
+.room-live-grid {
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0 0 8px;
+  scrollbar-width: thin;
+  scrollbar-color: #2a2820 transparent;
+}
+
+.room-live-tile {
+  flex: 0 0 200px;
+  min-width: 200px;
+  border: 1px solid #222018;
+  border-radius: 10px;
+  background: #111110;
+  overflow: hidden;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
+/* Options (⋮) button */
 .room-live-more {
   position: absolute;
   top: 8px;
   right: 8px;
-  border-radius: 999px;
-  border: 1px solid #3f4653;
-  background: rgba(17, 19, 23, 0.94);
-  color: #f2f4f7;
-  min-width: 28px;
-  height: 28px;
+  border-radius: 50%;
+  border: 1px solid #333028;
+  background: rgba(10, 10, 10, 0.92);
+  color: #8a8070;
+  width: 26px;
+  height: 26px;
   padding: 0;
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1;
-  z-index: 3;
+  z-index: 4;
+  display: grid;
+  place-items: center;
 }
 
-.room-live-more:disabled {
-  opacity: 0.4;
-}
+.room-live-more:disabled { opacity: 0.3; }
 
 .room-live-menu {
   position: absolute;
-  top: 42px;
+  top: 40px;
   right: 8px;
-  border: 1px solid #3a404a;
-  border-radius: 10px;
-  background: #161920;
+  border: 1px solid #2e2a20;
+  border-radius: 8px;
+  background: #141310;
   padding: 6px;
-  z-index: 4;
+  z-index: 5;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7);
 }
 
 .room-live-menu button {
-  border: 1px solid #3a404a;
-  border-radius: 8px;
-  background: #1a1e25;
-  color: #e6eaf0;
-  padding: 8px 10px;
+  border: 1px solid #2e2a20;
+  border-radius: 6px;
+  background: #1a1814;
+  color: #c8b890;
+  padding: 7px 12px;
   font-size: 12px;
   white-space: nowrap;
 }
 
-.room-live-tile video {
-  width: 100%;
-  height: 100%;
-  display: block;
-  object-fit: cover;
-  background: #050607;
-}
-
-.room-live-stage {
-  display: grid;
-  grid-template-rows: auto auto auto auto auto auto;
-  gap: 12px;
-  min-height: 0;
-  overflow: hidden;
-  width: min(1580px, 100%);
-  margin: 0 auto;
-}
-
+/* Placeholder */
 .room-live-placeholder {
+  width: 100%;
   height: 100%;
   display: grid;
   place-items: center;
-  color: #9aa3b0;
-  font-size: 14px;
+  color: #3a3830;
+  font-size: 13px;
 }
 
+/* Dock */
 .room-live-dock {
+  border-top: 1px solid #1e1c18;
+  background: #0e0e10;
+  padding: 10px 16px 12px;
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  flex-shrink: 0;
+}
+
+.room-live-dock-inner {
   display: flex;
-  justify-content: center;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
+  justify-content: center;
 }
 
-.room-live-dock button {
-  border-radius: 999px;
-  border: 1px solid #404754;
-  background: #1a1e25;
-  color: #eff2f6;
-  padding: 10px 16px;
+.dock-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  border: 1px solid #2e2a22;
+  border-radius: 10px;
+  background: #161410;
+  color: #c8bfa8;
+  padding: 8px 16px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  font-family: 'Georgia', serif;
+  min-width: 72px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
 }
 
-.room-live-dock .room-live-leave {
-  border-color: #6a2029;
-  background: #8e2532;
-  color: #ffffff;
+.dock-btn:hover:not(:disabled) {
+  background: #201e18;
+  border-color: #3e3a2e;
 }
 
-.room-live-interim,
-.room-live-warning,
-.room-live-footer {
+.dock-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.dock-btn--warn {
+  border-color: #4a2820;
+  background: #1e1008;
+  color: #c87a5a;
+}
+
+.dock-btn--sign {
+  border-color: #1e3828;
+  background: #0c1e14;
+  color: #7ac89a;
+}
+
+.dock-btn--leave {
+  border-color: #3e1818;
+  background: #200c0c;
+  color: #c86060;
+}
+
+.dock-icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* Footer text */
+.room-live-interim {
+  font-size: 12px;
+  color: #8a8070;
+  font-style: italic;
+  margin: 0;
+}
+
+.room-live-warning {
+  font-size: 11px;
+  color: #a06050;
   margin: 0;
   text-align: center;
 }
 
-.room-live-interim {
-  color: #dee3ea;
-  font-size: 13px;
+.room-live-footer-meta {
+  font-size: 11px;
+  color: #4a4840;
+  margin: 0;
+  letter-spacing: 0.03em;
+  font-family: 'Courier New', monospace;
 }
 
-.room-live-footer {
-  color: #9ca5b2;
-  font-size: 12px;
+.room-live-footer-meta strong {
+  color: #7a7060;
 }
 
-.room-panel {
-  display: grid;
-  gap: 12px;
-}
-
-.room-actions {
-  display: flex;
-  gap: 10px;
-}
-
+/* Legacy — kept so nothing else breaks */
+.room-panel { display: grid; gap: 12px; }
+.room-actions { display: flex; gap: 10px; }
 .speaker-menu {
   position: fixed;
   z-index: 1000;
@@ -873,22 +990,18 @@ button.danger {
   padding: 8px;
 }
 
+/* Responsive */
 @media (max-width: 960px) {
   .room-live-shell {
-    height: 100dvh;
-    padding: 14px 10px;
-  }
-
-  .room-live-grid {
-    gap: 8px;
-  }
-
-  .room-live-tile {
-    flex-basis: 176px;
-    min-width: 176px;
+    grid-template-rows: 44px 1fr auto;
   }
 
   .room-live-featured {
     grid-template-columns: 1fr;
+  }
+
+  .room-live-tile {
+    flex-basis: 160px;
+    min-width: 160px;
   }
 }

@@ -18,5 +18,15 @@
     "id": "b9b4de82-4ce7-46a5-9fff-0d4c6df57c79",
     "username": "ayn250605@gmail.com",
     "password_hash": "$2b$12$dzwCWSc2PVY8mtsy68.dhemduWXanmBK81hTvSLz0Z.IgM0FIuNL."
+  },
+  {
+    "id": "f52e2711-fd16-4049-b43f-9146cbd265ae",
+    "username": "ruhiparveen2004@gmail.com",
+    "password_hash": "$2b$12$M1Cab7LKuA.yeAMgmuFEc.5BsRIYUWf44370kuF0o0z/fLo8fMC/K"
+  },
+  {
+    "id": "f1b5b094-b5db-45fa-897a-f812972f3f44",
+    "username": "ruhi",
+    "password_hash": "$2b$12$TtaLivPTiBBx3WBzC3pkx.qbQgs7N7l2ozQGCIRxaML7ljT7tnXJO"
   }
 ]

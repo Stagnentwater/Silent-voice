@@ -46,6 +46,7 @@ export function useSpeechToPose({ poseClient, onPoseReady, speakerId }) {
 
         try {
           const response = await poseClient.fetchPose(chunkText);
+          if (!result) return;
           onPoseReady({
             text: chunkText,
             poseIds: response.poseIds,

@@ -94,6 +94,7 @@ export function createPoseClient(baseUrl) {
 
   return {
     async fetchPose(text, signal) {
+      if (!text || !text.trim()) return null; 
       const { signal: timeoutSignal, clear } = withTimeout(signal, DEFAULT_TIMEOUT_MS);
       try {
         const response = await fetch(`${normalizedBase}/pose`, {

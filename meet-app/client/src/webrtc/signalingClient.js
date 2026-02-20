@@ -19,17 +19,17 @@ export class SignalingClient {
       }
     });
 
-    this.socket.addEventListener('message', (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        const callback = this.handlers.get(data.type);
-        if (callback) {
-          callback(data);
+      this.socket.addEventListener('message', (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          const callback = this.handlers.get(data.type);
+          if (callback) {
+            callback(data);
+          }
+        } catch {
+          // Silently ignore malformed signaling payloads.
         }
-      } catch {
-        // Silently ignore malformed signaling payloads.
-      }
-    });
+      });
   }
 
   on(type, callback) {
