@@ -149,21 +149,14 @@ export function RoomPage() {
       const roomMeta = await joinRoomApi({ roomCode: normalizedRoomCode });
       const resolvedUserId = String(user?.id || '').trim();
       if (!resolvedUserId) throw new Error('Unable to identify current user');
-
-      const previewForJoin = previewStream instanceof MediaStream ? previewStream : null;
-
       await joinRealtimeRoom(normalizedRoomCode, {
         userId: resolvedUserId,
         username: user?.username,
         hostId: String(roomMeta?.hostId || '').trim() || resolvedUserId,
-        initialStream: previewForJoin,
         audioEnabled: !isMuted,
         videoEnabled: !isVideoOff
       });
-
-      if (previewForJoin) {
-        setPreviewStream(null);
-      }
+      if (previewStream) { previewStream.getTracks().forEach((t) => t.stop()); setPreviewStream(null); }
     } catch (err) {
       setError(err.message || 'Unable to join meeting');
     } finally {
@@ -421,19 +414,6 @@ export function RoomPage() {
     ? effectiveSpeakerId === user?.id ? user?.username || 'You' : speakerLabel
     : user?.username || 'You';
 
-  const remoteParticipantTiles = Object.entries(participantsByPeerId)
-    .filter(([pid]) => pid !== peerId)
-    .map(([pid, participant]) => ({
-      key: `peer-${pid}`,
-      peerId: pid,
-      userId: participant?.userId,
-      name: participant?.username || `Peer ${pid.slice(0, 6)}`,
-      isYou: false,
-      isHostTile: Boolean(participant?.isHost),
-      stream: remoteStreams[pid] || null,
-      isSpeaker: Boolean(participant?.userId && effectiveSpeakerId && participant.userId === effectiveSpeakerId)
-    }));
-
   const nonSpeakerTiles = [
     {
       key: `self-${user?.id || 'me'}`,
@@ -444,7 +424,18 @@ export function RoomPage() {
       stream: localStream,
       isSpeaker: Boolean(user?.id && effectiveSpeakerId === user.id)
     },
-    ...remoteParticipantTiles
+    ...remoteEntries.map(([remotePeerId, stream]) => {
+      const participant = participantsByPeerId[remotePeerId];
+      return {
+        key: `peer-${remotePeerId}`,
+        userId: participant?.userId,
+        name: participant?.username || `Peer ${remotePeerId.slice(0, 6)}`,
+        isYou: false,
+        isHostTile: Boolean(participant?.isHost),
+        stream,
+        isSpeaker: Boolean(participant?.userId && effectiveSpeakerId && participant.userId === effectiveSpeakerId)
+      };
+    })
   ].filter((tile) => !(tile.isSpeaker && primarySpeakerStream));
 
   function toggleSpeakerMenu(tileKey) {
