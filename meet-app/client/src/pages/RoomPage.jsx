@@ -20,17 +20,31 @@ function StreamView({ stream, muted, showSpeakingBorder = false }) {
   useEffect(() => {
     const el = videoRef.current;
     if (!el) return undefined;
+    el.muted = muted;
     el.srcObject = stream || null;
-    if (stream) {
+
+    const attemptPlay = () => {
       const playPromise = el.play();
       if (playPromise && typeof playPromise.catch === 'function') {
         playPromise.catch(() => {
           // Browser may block autoplay until a user gesture; ignore and retry on next render/update.
         });
       }
+    };
+
+    const handleLoadedMetadata = () => {
+      attemptPlay();
+    };
+
+    el.addEventListener('loadedmetadata', handleLoadedMetadata);
+    if (stream) {
+      attemptPlay();
     }
-    return () => { el.srcObject = null; };
-  }, [stream]);
+    return () => {
+      el.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      el.srcObject = null;
+    };
+  }, [muted, stream]);
 
   useEffect(() => {
     if (!showSpeakingBorder || !stream || muted) {

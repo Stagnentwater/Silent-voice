@@ -231,12 +231,6 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
               .getTracks()
               .filter((existingTrack) => existingTrack.id !== track.id && existingTrack.readyState === 'live');
 
-            if (!remainingTracks.length) {
-              const next = { ...current };
-              delete next[targetPeerId];
-              return next;
-            }
-
             return {
               ...current,
               [targetPeerId]: new MediaStream(remainingTracks)
@@ -412,6 +406,11 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
       }
 
       (peers || []).forEach((targetPeerId) => {
+        const shouldInitiate = String(assignedPeerId || '') < String(targetPeerId || '');
+        if (!shouldInitiate) {
+          return;
+        }
+
         connectToPeer(targetPeerId).catch(() => {
           cleanupPeer(targetPeerId);
         });
@@ -428,6 +427,11 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
 
       const resolvedPeerId = participant?.peerId || targetPeerId;
       if (!resolvedPeerId || resolvedPeerId === peerIdRef.current) {
+        return;
+      }
+
+      const shouldInitiate = String(peerIdRef.current || '') < String(resolvedPeerId || '');
+      if (!shouldInitiate) {
         return;
       }
 
