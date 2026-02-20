@@ -21,6 +21,14 @@ function StreamView({ stream, muted, showSpeakingBorder = false }) {
     const el = videoRef.current;
     if (!el) return undefined;
     el.srcObject = stream || null;
+    if (stream) {
+      const playPromise = el.play();
+      if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise.catch(() => {
+          // Browser may block autoplay until a user gesture; ignore and retry on next render/update.
+        });
+      }
+    }
     return () => { el.srcObject = null; };
   }, [stream]);
 

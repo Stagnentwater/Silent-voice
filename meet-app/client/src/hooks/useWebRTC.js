@@ -59,6 +59,32 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
     resolver(payloadOrError);
   }, []);
 
+  const upsertRemoteStreamTracks = useCallback((targetPeerId, tracks = []) => {
+    const validTracks = tracks.filter((track) => track && track.readyState === 'live');
+
+    if (!validTracks.length) {
+      return;
+    }
+
+    setRemoteStreams((current) => {
+      const existing = current[targetPeerId];
+      const nextStream = new MediaStream(existing ? existing.getTracks() : []);
+      const existingIds = new Set(nextStream.getTracks().map((track) => track.id));
+
+      validTracks.forEach((track) => {
+        if (!existingIds.has(track.id)) {
+          nextStream.addTrack(track);
+          existingIds.add(track.id);
+        }
+      });
+
+      return {
+        ...current,
+        [targetPeerId]: nextStream
+      };
+    });
+  }, []);
+
   const cleanupPeer = useCallback((targetPeerId) => {
     const connection = peersRef.current.get(targetPeerId);
     if (connection) {
@@ -115,6 +141,13 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
 
     const peerConnection = new RTCPeerConnection({ iceServers });
 
+    try {
+      peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
+      peerConnection.addTransceiver('video', { direction: 'sendrecv' });
+    } catch {
+      // Ignore transceiver setup failures for older browser implementations.
+    }
+
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((track) => {
         peerConnection.addTrack(track, localStreamRef.current);
@@ -135,13 +168,36 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
 
     peerConnection.ontrack = (event) => {
       const [incoming] = event.streams;
-      const stream = incoming || new MediaStream();
-      // Clone to force React state updates and keep only live tracks
-      const cleanStream = new MediaStream(stream.getTracks().filter((t) => t.readyState === 'live'));
-      if (!cleanStream.getTracks().length) {
-        return;
+      const streamTracks = incoming ? incoming.getTracks() : [];
+      const track = event.track;
+
+      upsertRemoteStreamTracks(targetPeerId, [...streamTracks, track]);
+
+      if (track) {
+        track.onended = () => {
+          setRemoteStreams((current) => {
+            const existing = current[targetPeerId];
+            if (!existing) {
+              return current;
+            }
+
+            const remainingTracks = existing
+              .getTracks()
+              .filter((existingTrack) => existingTrack.id !== track.id && existingTrack.readyState === 'live');
+
+            if (!remainingTracks.length) {
+              const next = { ...current };
+              delete next[targetPeerId];
+              return next;
+            }
+
+            return {
+              ...current,
+              [targetPeerId]: new MediaStream(remainingTracks)
+            };
+          });
+        };
       }
-      setRemoteStreams((current) => ({ ...current, [targetPeerId]: cleanStream }));
     };
 
     peerConnection.onconnectionstatechange = () => {
@@ -167,7 +223,7 @@ export function useWebRTC({ signalingUrl, onPosePacket }) {
 
     peersRef.current.set(targetPeerId, peerConnection);
     return peerConnection;
-  }, [attachDataChannel, cleanupPeer, iceServers]);
+  }, [attachDataChannel, cleanupPeer, iceServers, upsertRemoteStreamTracks]);
 
   const connectToPeer = useCallback(async (targetPeerId) => {
     const peerConnection = createPeerConnection(targetPeerId, true);
