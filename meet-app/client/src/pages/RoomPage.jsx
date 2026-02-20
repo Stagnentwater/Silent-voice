@@ -167,10 +167,10 @@ export function RoomPage() {
         userId: resolvedUserId,
         username: user?.username,
         hostId: String(roomMeta?.hostId || '').trim() || resolvedUserId,
-        mediaStream: previewStream || undefined,
         audioEnabled: !isMuted,
         videoEnabled: !isVideoOff
       });
+      if (previewStream) { previewStream.getTracks().forEach((t) => t.stop()); setPreviewStream(null); }
     } catch (err) {
       setError(err.message || 'Unable to join meeting');
     } finally {
@@ -392,9 +392,8 @@ export function RoomPage() {
   }
 
   // ─── LIVE MEETING ─────────────────────────────────────────────────────────────
+  const remoteEntries = Object.entries(remoteStreams);
   const participantsByPeerId = participants || {};
-  const participantEntries = Object.entries(participantsByPeerId);
-  const remoteParticipantEntries = participantEntries.filter(([pid]) => pid !== peerId);
   const isLocalUserHost = Boolean(user?.id && hostId && user.id === hostId);
   const canAssignSpeaker = Boolean(isHost || isLocalUserHost);
 
@@ -410,7 +409,7 @@ export function RoomPage() {
 
   const effectiveSpeakerId = speakerId || user?.id || null;
 
-  const speakerPeerId = remoteParticipantEntries.find(([pid]) => {
+  const speakerPeerId = remoteEntries.find(([pid]) => {
     const participant = participantsByPeerId[pid];
     return participant?.userId && effectiveSpeakerId && participant.userId === effectiveSpeakerId;
   })?.[0] || null;
@@ -439,14 +438,15 @@ export function RoomPage() {
       stream: localStream,
       isSpeaker: Boolean(user?.id && effectiveSpeakerId === user.id)
     },
-    ...remoteParticipantEntries.map(([remotePeerId, participant]) => {
+    ...remoteEntries.map(([remotePeerId, stream]) => {
+      const participant = participantsByPeerId[remotePeerId];
       return {
         key: `peer-${remotePeerId}`,
         userId: participant?.userId,
         name: participant?.username || `Peer ${remotePeerId.slice(0, 6)}`,
         isYou: false,
         isHostTile: Boolean(participant?.isHost),
-        stream: remoteStreams[remotePeerId] || null,
+        stream,
         isSpeaker: Boolean(participant?.userId && effectiveSpeakerId && participant.userId === effectiveSpeakerId)
       };
     })
