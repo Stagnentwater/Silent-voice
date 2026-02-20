@@ -18,6 +18,8 @@ function getBrowserNetworkContext() {
 
 const networkContext = getBrowserNetworkContext();
 const isDev = Boolean(import.meta.env.DEV);
+const deployedApiFallback = 'https://silent-voice-o571.vercel.app';
+const deployedSignalingFallback = 'wss://silent-voicee.onrender.com';
 const origin =
   typeof window !== 'undefined' && window.location?.origin
     ? window.location.origin
@@ -26,11 +28,11 @@ const wsOrigin = origin.replace(/^http/, 'ws');
 
 export const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ||
-  (isDev ? '' : origin);
+  (isDev ? '' : deployedApiFallback);
 
 export const SIGNALING_URL =
   import.meta.env.VITE_SIGNALING_URL ||
-  `${wsOrigin}/ws`;
+  (isDev ? `${wsOrigin}/ws` : deployedSignalingFallback);
 
 export const POSE_SERVER_URL =
   import.meta.env.VITE_POSE_SERVER_URL ||
