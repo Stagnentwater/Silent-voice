@@ -7,7 +7,7 @@ import { useSignToSpeech } from '../hooks/useSignToSpeech.js';
 import { createPoseClient } from '../services/poseApi.js';
 import { createPosePacket } from '../services/poseChannel.js';
 import { AvatarCanvas } from '../components/AvatarCanvas.jsx';
-import { POSE_SERVER_URL, SIGNALING_URL } from '../config/network.js';
+import { POSE_SERVER_URL, POSE_SERVER_FALLBACK_URL, SIGNALING_URL } from '../config/network.js';
 
 // StreamView — when showSpeakingBorder=true, analyses audio and writes
 // --spk-rms (0–1) onto the wrapper div so CSS can grow the white border.
@@ -125,7 +125,10 @@ export function RoomPage() {
   const waveShellRef = useRef(null);
   const smoothedRmsRef = useRef(0);
 
-  const poseClient = useMemo(() => createPoseClient(POSE_SERVER_URL), []);
+  const poseClient = useMemo(
+    () => createPoseClient(POSE_SERVER_URL, POSE_SERVER_FALLBACK_URL),
+    []
+  );
 
   const {
     localStream,

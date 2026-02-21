@@ -127,7 +127,8 @@ document.addEventListener('DOMContentLoaded', () => {
           return;
         }
         const frames = Array.isArray(res.data) ? res.data.length : 0;
-        setStatus(`OK (${frames} frames)`, 'ok');
+        const usedUrl = res.url || url;
+        setStatus(`OK (${frames} frames) via ${usedUrl}`, 'ok');
       });
     });
   }

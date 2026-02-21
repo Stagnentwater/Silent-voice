@@ -89,50 +89,79 @@ function withTimeout(signal, timeoutMs) {
   };
 }
 
-export function createPoseClient(baseUrl) {
+export function createPoseClient(baseUrl, fallbackBaseUrl) {
   const normalizedBase = (baseUrl || '').replace(/\/$/, '');
+  const normalizedFallbackBase = (fallbackBaseUrl || '').replace(/\/$/, '');
+  const baseCandidates = [normalizedBase, normalizedFallbackBase].filter((value, index, all) => {
+    return Boolean(value) && all.indexOf(value) === index;
+  });
+
+  async function fetchPoseFrom(base, text, signal) {
+    const { signal: timeoutSignal, clear } = withTimeout(signal, DEFAULT_TIMEOUT_MS);
+    try {
+      const response = await fetch(`${base}/pose`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, words: text }),
+        signal: timeoutSignal
+      });
+
+      if (!response.ok) {
+        throw new Error(`Pose server returned ${response.status}`);
+      }
+
+      const payload = await response.json();
+
+      if (Array.isArray(payload.poseIds) && Array.isArray(payload.timings)) {
+        return payload;
+      }
+
+      if (Array.isArray(payload)) {
+        const poseFrames = payload.map((frame) => compactFrame(frame));
+        const timings = payload.map((frame, index) => {
+          const value = Number(frame?.frame);
+          return Number.isFinite(value) ? value * TARGET_FRAME_MS : index * TARGET_FRAME_MS;
+        });
+
+        return { poseFrames, timings };
+      }
+
+      throw new Error('Invalid pose payload shape');
+    } finally {
+      clear();
+    }
+  }
 
   return {
     async fetchPose(text, signal) {
       if (!text || !text.trim()) return null; 
-      const { signal: timeoutSignal, clear } = withTimeout(signal, DEFAULT_TIMEOUT_MS);
-      try {
-        const response = await fetch(`${normalizedBase}/pose`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text, words: text }),
-          signal: timeoutSignal
+      let lastError = null;
+
+      for (let index = 0; index < baseCandidates.length; index += 1) {
+        const base = baseCandidates[index];
+        try {
+          return await fetchPoseFrom(base, text, signal);
+        } catch (error) {
+          if (error?.name === 'AbortError') {
+            lastError = new Error('Pose request timed out');
+          } else {
+            lastError = error;
+          }
+        }
+
+        const hasAnotherCandidate = index < baseCandidates.length - 1;
+        if (!hasAnotherCandidate) {
+          break;
+        }
+
+        console.warn('[poseApi] primary pose endpoint failed; trying fallback', {
+          failedBase: base,
+          nextBase: baseCandidates[index + 1],
+          message: String(lastError?.message || lastError)
         });
-
-        if (!response.ok) {
-          throw new Error(`Pose server returned ${response.status}`);
-        }
-
-        const payload = await response.json();
-
-        if (Array.isArray(payload.poseIds) && Array.isArray(payload.timings)) {
-          return payload;
-        }
-
-        if (Array.isArray(payload)) {
-          const poseFrames = payload.map((frame) => compactFrame(frame));
-          const timings = payload.map((frame, index) => {
-            const value = Number(frame?.frame);
-            return Number.isFinite(value) ? value * TARGET_FRAME_MS : index * TARGET_FRAME_MS;
-          });
-
-          return { poseFrames, timings };
-        }
-
-        throw new Error('Invalid pose payload shape');
-      } catch (error) {
-        if (error?.name === 'AbortError') {
-          throw new Error('Pose request timed out');
-        }
-        throw error;
-      } finally {
-        clear();
       }
+
+      throw lastError || new Error('Pose lookup failed');
     }
   };
 }

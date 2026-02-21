@@ -3,6 +3,7 @@
 // Returns { ok: true, data } or { ok: false, error }
 
 const DEFAULT_POSE_URL = 'http://127.0.0.1:5000/pose';
+const DEFAULT_POSE_FALLBACK_URL = 'https://remove-strategies-limitations-plan.trycloudflare.com/pose';
 
 function normalizePoseUrl(url) {
   const u = (url || '').trim();
@@ -24,6 +25,15 @@ function getPoseUrl(callback) {
   }
 }
 
+function buildPoseUrlCandidates(primaryUrl) {
+  const normalizedLocal = normalizePoseUrl(DEFAULT_POSE_URL);
+  const normalizedPrimary = normalizePoseUrl(primaryUrl);
+  const normalizedFallback = normalizePoseUrl(DEFAULT_POSE_FALLBACK_URL);
+  return [normalizedLocal, normalizedPrimary, normalizedFallback].filter((value, index, all) => {
+    return Boolean(value) && all.indexOf(value) === index;
+  });
+}
+
 function fetchPose(words, url) {
   return fetch(url, {
     method: 'POST',
@@ -33,6 +43,31 @@ function fetchPose(words, url) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
   });
+}
+
+async function fetchPoseWithFallback(words, primaryUrl) {
+  const candidates = buildPoseUrlCandidates(primaryUrl);
+  let lastError = null;
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidateUrl = candidates[index];
+    try {
+      const data = await fetchPose(words, candidateUrl);
+      return { data, url: candidateUrl };
+    } catch (error) {
+      lastError = error;
+      const hasNext = index < candidates.length - 1;
+      if (hasNext) {
+        console.warn('[sign-engine][background] primary pose url failed, retrying fallback', {
+          failedUrl: candidateUrl,
+          nextUrl: candidates[index + 1],
+          message: String(error)
+        });
+      }
+    }
+  }
+
+  throw lastError || new Error('pose fetch failed');
 }
 
 function isFingerspellFrame(frame) {
@@ -46,8 +81,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   getPoseUrl((poseUrl) => {
     const url = normalizePoseUrl(message.url || poseUrl);
-    fetchPose(words, url)
-      .then((data) => sendResponse({ ok: true, data, url }))
+    fetchPoseWithFallback(words, url)
+      .then(({ data, url: usedUrl }) => sendResponse({ ok: true, data, url: usedUrl }))
       .catch((err) => {
         console.error('[sign-engine][background] fetch error', err);
         sendResponse({ ok: false, error: String(err), url });
@@ -367,7 +402,14 @@ chrome.runtime.onConnect.addListener((port) => {
           // ignore
         }
 
-        const data = await fetchPose(msg.words || '', url);
+        const { data, url: usedUrl } = await fetchPoseWithFallback(msg.words || '', url);
+        if (usedUrl !== url) {
+          try {
+            port.postMessage({ type: 'POSE_META', url: usedUrl });
+          } catch (e) {
+            // ignore
+          }
+        }
         const CHUNK = 200;
         for (let i = 0; i < data.length; i += CHUNK) {
           port.postMessage({ type: 'POSE_CHUNK', frames: data.slice(i, i + CHUNK) });
