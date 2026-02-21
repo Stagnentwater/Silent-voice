@@ -3,7 +3,7 @@
 // Returns { ok: true, data } or { ok: false, error }
 
 const DEFAULT_POSE_URL = 'http://127.0.0.1:5000/pose';
-const DEFAULT_POSE_FALLBACK_URL = 'https://remove-strategies-limitations-plan.trycloudflare.com/pose';
+const DEFAULT_POSE_FALLBACK_URL = 'https://executive-parliament-forecasts-diagram.trycloudflare.com/pose';
 
 function normalizePoseUrl(url) {
   const u = (url || '').trim();

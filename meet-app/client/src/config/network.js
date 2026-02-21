@@ -23,7 +23,7 @@ const isProdMode = appMode === 'prod';
 const localApiFallback = 'http://localhost:5000';
 const localSignalingFallback = 'ws://localhost:8080';
 const localPoseFallback = 'http://localhost:5000';
-const localPosePublicFallback = 'https://remove-strategies-limitations-plan.trycloudflare.com';
+const localPosePublicFallback = 'https://executive-parliament-forecasts-diagram.trycloudflare.com';
 
 const prodApiFallback = 'https://silent-voice-o571.vercel.app';
 const prodSignalingFallback = 'wss://silent-voicee.onrender.com';
@@ -50,7 +50,7 @@ export const POSE_SERVER_URL =
 export const POSE_SERVER_FALLBACK_URL =
   import.meta.env.VITE_POSE_SERVER_FALLBACK_URL ||
   (isProdMode
-    ? (import.meta.env.VITE_PROD_POSE_SERVER_FALLBACK_URL || '')
+    ? (import.meta.env.VITE_PROD_POSE_SERVER_FALLBACK_URL || localPosePublicFallback)
     : (import.meta.env.VITE_LOCAL_POSE_SERVER_FALLBACK_URL || localPosePublicFallback));
 
 if (isProdMode && (!API_BASE_URL || !SIGNALING_URL || !POSE_SERVER_URL)) {
