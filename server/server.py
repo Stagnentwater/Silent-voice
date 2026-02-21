@@ -17,6 +17,8 @@ from pgvector.psycopg2 import register_vector
 from sentence_transformers import SentenceTransformer
 from flask import Flask, Response, request, make_response, jsonify
 
+from config import ENVIRONMENT, IS_LOCAL, API_HOST, API_PORT, get_database_url
+
 
 dotenv.load_dotenv()
 app = Flask(__name__)
@@ -203,6 +205,16 @@ def _default_sslmode(host: str) -> str:
 
 
 def _connect_db():
+    database_url = get_database_url()
+    if database_url:
+        conn = psycopg2.connect(
+            database_url,
+            connect_timeout=int(os.getenv("DB_CONNECT_TIMEOUT", "10")),
+        )
+        register_vector(conn)
+        _ensure_light_indexes(conn)
+        return conn
+
     host = os.getenv("DB_HOST", "localhost")
     port = int(os.getenv("DB_PORT", "5432"))
     database = os.getenv("DB_NAME", "poses")
@@ -746,8 +758,8 @@ def pose_word(sign_id):
 
 
 if __name__ == "__main__":
-    # Keep defaults compatible with the extension (127.0.0.1:5000)
-    host = os.getenv("HOST", "127.0.0.1")
-    port = int(os.getenv("PORT", "5000"))
+    app.logger.info("[startup] environment=%s local=%s", ENVIRONMENT, IS_LOCAL)
+    host = API_HOST
+    port = API_PORT
     app.run(host=host, port=port)
 

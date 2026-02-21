@@ -43,7 +43,7 @@ venv/
 env/
 
 # Project data (large/local)
-data/
+
 
 # Node/Extension artifacts
 extension/node_modules/
