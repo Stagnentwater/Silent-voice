@@ -108,10 +108,16 @@ export const FACE_LM = {
 // Shouko bone names are clean (no prefixes). Direct lookup with case-insensitive fallback.
 export function resolveBoneName(canonical, boneMap) {
   if (!canonical) return null;
+  // 1. Exact match
   if (boneMap[canonical]) return boneMap[canonical];
-  // Case-insensitive fallback
-  const key = Object.keys(boneMap).find(
-    (k) => k.toLowerCase() === canonical.toLowerCase()
-  );
-  return key ? boneMap[key] : null;
+  // 2. Case-insensitive match
+  const lc = canonical.toLowerCase();
+  const ciKey = Object.keys(boneMap).find((k) => k.toLowerCase() === lc);
+  if (ciKey) return boneMap[ciKey];
+  // 3. Strip common Blender GLB prefixes (e.g. "Armature_Arm_L" → "Arm_L")
+  const suffixKey = Object.keys(boneMap).find((k) => {
+    const kl = k.toLowerCase();
+    return kl.endsWith(lc) && (kl.length === lc.length || kl[kl.length - lc.length - 1] === '_');
+  });
+  return suffixKey ? boneMap[suffixKey] : null;
 }

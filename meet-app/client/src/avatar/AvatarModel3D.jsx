@@ -250,23 +250,46 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
 
   // ── Discover bones on load ─────────────────────────────────────────────
   useEffect(() => {
-    // ── Fix MMD-exported materials ───────────────────────────────────────
+    // ── Fix MMD-exported materials + texture encoding ────────────────────
+    let matCount = 0;
+    let texCount = 0;
     scene.traverse((obj) => {
       if (obj.isMesh || obj.isSkinnedMesh) {
         obj.frustumCulled = false;
         if (obj.material) {
           const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
           mats.forEach((mat) => {
+            matCount++;
             mat.side = THREE.DoubleSide;
             if (mat.transparent) {
               mat.alphaTest = mat.alphaTest || 0.1;
               mat.depthWrite = true;
             }
+            // Fix texture color space for all texture maps
+            const texProps = ['map', 'emissiveMap', 'aoMap', 'lightMap'];
+            texProps.forEach((prop) => {
+              if (mat[prop]) {
+                mat[prop].colorSpace = THREE.SRGBColorSpace;
+                texCount++;
+              }
+            });
+            // For normal/bump maps use linear
+            const linProps = ['normalMap', 'bumpMap', 'displacementMap', 'roughnessMap', 'metalnessMap'];
+            linProps.forEach((prop) => {
+              if (mat[prop]) {
+                mat[prop].colorSpace = THREE.LinearSRGBColorSpace;
+                texCount++;
+              }
+            });
             mat.needsUpdate = true;
           });
         }
       }
     });
+    console.log(`[AvatarModel3D] materials: ${matCount}, textures fixed: ${texCount}`);
+    if (texCount === 0) {
+      console.warn('[AvatarModel3D] NO textures found in GLB — model may appear white. Re-export GLB with "Images: Packed" enabled.');
+    }
 
     // ── Auto-scale: compute bounding box and normalize to target height ──
     const bbox = new THREE.Box3().setFromObject(scene);
@@ -317,8 +340,26 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
         );
       }
 
-      // Direction the bone points in world space in rest pose (+Y in local)
-      const restWorldDir = new THREE.Vector3(0, 1, 0).applyQuaternion(restWorldQuat);
+      // Direction the bone points in world space — use child bone position
+      // instead of assuming local +Y (MMD bones don't follow this convention)
+      let restWorldDir;
+      const boneWorldPos = new THREE.Vector3();
+      bone.getWorldPosition(boneWorldPos);
+      const childBone = bone.children.find((c) => c.isBone || c.type === 'Bone');
+      if (childBone) {
+        childBone.updateWorldMatrix(true, false);
+        const childWorldPos = new THREE.Vector3();
+        childBone.getWorldPosition(childWorldPos);
+        restWorldDir = childWorldPos.sub(boneWorldPos);
+        if (restWorldDir.lengthSq() > 1e-8) {
+          restWorldDir.normalize();
+        } else {
+          restWorldDir = new THREE.Vector3(0, 1, 0).applyQuaternion(restWorldQuat);
+        }
+      } else {
+        // Leaf bone (finger tip, etc.) — fallback to local +Y
+        restWorldDir = new THREE.Vector3(0, 1, 0).applyQuaternion(restWorldQuat);
+      }
 
       return {
         bone,
@@ -406,12 +447,26 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
       const p = entry.packet;
       console.log('[AvatarModel3D] packet keys:', Object.keys(p));
       console.log('[AvatarModel3D] poseFrames count:', p.poseFrames?.length ?? 'MISSING — check backend shape');
+      console.log('[AvatarModel3D] resolved bones count:', Object.keys(segBones).length,
+        '| bone names:', Object.keys(segBones).slice(0, 10));
       const firstFrame = p.poseFrames?.[0];
       if (firstFrame) {
         const poseLmKeys = Object.keys(firstFrame.pose_landmarks ?? {});
-        console.log('[AvatarModel3D] pose_landmarks present:', poseLmKeys.length > 0, '| sample keys:', poseLmKeys.slice(0, 8));
+        console.log('[AvatarModel3D] pose_landmarks present:', poseLmKeys.length > 0, '| keys:', poseLmKeys);
         console.log('[AvatarModel3D] left_hand_landmarks present:', !!firstFrame.left_hand_landmarks);
         console.log('[AvatarModel3D] face_landmarks present:', !!firstFrame.face_landmarks);
+        // Test one segment to verify the quaternion pipeline
+        if (poseLmKeys.length > 0) {
+          const testSeg = BODY_SEGMENTS[0]; // Arm_L
+          const testEntry = segBones[testSeg.boneName];
+          if (testEntry) {
+            const testQ = segmentQuat(firstFrame.pose_landmarks, testSeg.from, testSeg.to, testEntry);
+            console.log('[AvatarModel3D] test segmentQuat for', testSeg.boneName, '→', testQ ? 'OK' : 'null',
+              '| restDir:', testEntry.restWorldDir.toArray().map(v => v.toFixed(2)));
+          } else {
+            console.warn('[AvatarModel3D] test bone', testSeg.boneName, 'not found in segBones');
+          }
+        }
       } else {
         console.warn('[AvatarModel3D] no first frame found — poseFrames may be empty or misnamed');
       }
@@ -454,21 +509,21 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
 
     // ── Body / upper limbs ──────────────────────────────────────────────
     if (isLmSet(poseLm)) {
-      driveSegments(poseLm, BODY_SEGMENTS, 0.25);
+      driveSegments(poseLm, BODY_SEGMENTS, 0.5);
     } else {
       driftToRest(BODY_SEGMENTS);
     }
 
     // ── Left fingers ────────────────────────────────────────────────────
     if (isLmSet(leftLm)) {
-      driveSegments(leftLm, LEFT_HAND_SEGMENTS, 0.5);
+      driveSegments(leftLm, LEFT_HAND_SEGMENTS, 0.6);
     } else {
       driftToRest(LEFT_HAND_SEGMENTS);
     }
 
     // ── Right fingers ───────────────────────────────────────────────────
     if (isLmSet(rightLm)) {
-      driveSegments(rightLm, RIGHT_HAND_SEGMENTS, 0.5);
+      driveSegments(rightLm, RIGHT_HAND_SEGMENTS, 0.6);
     } else {
       driftToRest(RIGHT_HAND_SEGMENTS);
     }
@@ -478,7 +533,7 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
       if (faceBones.head) {
         const e = faceBones.head;
         const q = faceHeadQuat(faceLm, e.bone);
-        e.bone.quaternion.slerp(q ?? e.restQuat, q ? 0.3 : 0.06);
+        e.bone.quaternion.slerp(q ?? e.restQuat, q ? 0.5 : 0.06);
       }
     } else {
       if (faceBones.head) faceBones.head.bone.quaternion.slerp(faceBones.head.restQuat, 0.06);
