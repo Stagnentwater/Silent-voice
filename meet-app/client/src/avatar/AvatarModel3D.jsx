@@ -11,7 +11,7 @@ import {
   resolveBoneName,
 } from './poseToBonesMap.js';
 
-const GLB_PATH = '/connor_rk900_-_detroit_become_human.glb';
+const GLB_PATH = '/shoko.glb';
 const TARGET_FRAME_MS = 200; // ~5 fps, 2× slower signing speed
 
 // ─── Coordinate conversion ───────────────────────────────────────────────────
@@ -189,27 +189,43 @@ function faceHeadQuat(faceLm, headBone) {
 }
 
 /**
- * Compute jaw rotation from mouth openness.
- * Jaw opens by rotating around local +X axis.
+ * Compute mouth-open ratio from face landmarks (0–1).
  */
-function faceJawQuat(faceLm, jawRestQuat) {
-  const fi      = FACE_LM;
-  const upper   = faceLm[fi.UPPER_LIP];
-  const lower   = faceLm[fi.LOWER_LIP];
-  const fHead   = faceLm[fi.FOREHEAD_TOP];
-  const fChin   = faceLm[fi.CHIN_BOTTOM];
-  if (!upper || !lower || !fHead || !fChin) return jawRestQuat.clone();
+function faceMouthOpen(faceLm) {
+  const fi    = FACE_LM;
+  const upper = faceLm[fi.UPPER_LIP];
+  const lower = faceLm[fi.LOWER_LIP];
+  const fHead = faceLm[fi.FOREHEAD_TOP];
+  const fChin = faceLm[fi.CHIN_BOTTOM];
+  if (!upper || !lower || !fHead || !fChin) return 0;
 
   const mouthGap   = Math.abs(lower.y - upper.y);
   const faceHeight = Math.abs(fChin.y - fHead.y);
-  const openRatio  = faceHeight > 0.01 ? mouthGap / faceHeight : 0;
+  return faceHeight > 0.01 ? Math.min(mouthGap / faceHeight * 3.0, 1.0) : 0;
+}
 
-  // Map ratio to at most ~35 degrees
-  const angle = Math.min(openRatio * Math.PI * 2.2, Math.PI / 5.2);
-  const deltaQ = new THREE.Quaternion().setFromAxisAngle(
-    new THREE.Vector3(1, 0, 0), angle
-  );
-  return jawRestQuat.clone().multiply(deltaQ);
+/**
+ * Compute eye-blink ratio from face landmarks (0–1).
+ * Uses vertical distance between upper and lower eyelid relative to face height.
+ */
+function faceBlinkRatio(faceLm) {
+  const fi    = FACE_LM;
+  const fHead = faceLm[fi.FOREHEAD_TOP];
+  const fChin = faceLm[fi.CHIN_BOTTOM];
+  // Upper/Lower eyelid landmarks (MediaPipe face mesh)
+  const upperLidL = faceLm[159];
+  const lowerLidL = faceLm[145];
+  const upperLidR = faceLm[386];
+  const lowerLidR = faceLm[374];
+  if (!fHead || !fChin || !upperLidL || !lowerLidL || !upperLidR || !lowerLidR) return 0;
+
+  const faceH = Math.abs(fChin.y - fHead.y);
+  if (faceH < 0.01) return 0;
+  const openL = Math.abs(lowerLidL.y - upperLidL.y) / faceH;
+  const openR = Math.abs(lowerLidR.y - upperLidR.y) / faceH;
+  const avgOpen = (openL + openR) / 2;
+  // When eye opening < threshold, map to blink (1 = fully closed)
+  return Math.max(0, Math.min(1.0 - avgOpen * 12.0, 1.0));
 }
 
 // ─── Component ───────────────────────────────────────────────────────────────
@@ -220,6 +236,10 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
   const segmentBonesRef = useRef({});
   // Face bones
   const faceBoneRef = useRef({ head: null, jaw: null });
+  // Morph target meshes: array of { mesh, dict } for driving face morphs
+  const morphMeshesRef = useRef([]);
+  // Current morph state for smooth interpolation
+  const morphStateRef = useRef({ mouthOpen: 0, blink: 0 });
 
   // Sequence tracking
   const packetRef   = useRef(null); // { packet, startMs }
@@ -295,6 +315,19 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
     };
     console.log('[AvatarModel3D] head bone:', headBoneObj?.name ?? 'NOT FOUND');
     console.log('[AvatarModel3D] jaw bone:', jawBoneObj?.name ?? 'none');
+
+    // ── Discover morph target meshes ──────────────────────────────────
+    const morphMeshes = [];
+    scene.traverse((obj) => {
+      if (obj.isMesh && obj.morphTargetDictionary && obj.morphTargetInfluences) {
+        morphMeshes.push({ mesh: obj, dict: obj.morphTargetDictionary });
+      }
+    });
+    morphMeshesRef.current = morphMeshes;
+    if (morphMeshes.length) {
+      console.log('[AvatarModel3D] morph meshes found:', morphMeshes.length,
+        '| sample morphs:', Object.keys(morphMeshes[0].dict).slice(0, 15));
+    }
   }, [scene]);
 
   // ── Track current packet + record start time ───────────────────────────
@@ -408,22 +441,53 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
         const q = faceHeadQuat(faceLm, e.bone);
         e.bone.quaternion.slerp(q ?? e.restQuat, q ? 0.3 : 0.06);
       }
-      if (faceBones.jaw) {
-        const e = faceBones.jaw;
-        const q = faceJawQuat(faceLm, e.restQuat);
-        e.bone.quaternion.slerp(q, 0.4);
-      }
     } else {
       if (faceBones.head) faceBones.head.bone.quaternion.slerp(faceBones.head.restQuat, 0.06);
-      if (faceBones.jaw)  faceBones.jaw.bone.quaternion.slerp(faceBones.jaw.restQuat,  0.06);
+    }
+
+    // ── Morph targets: mouth & blink ─────────────────────────────────
+    const mState = morphStateRef.current;
+    const morphMeshes = morphMeshesRef.current;
+    if (morphMeshes.length > 0) {
+      // Compute target morph values from face landmarks
+      const targetMouth = isLmSet(faceLm) ? faceMouthOpen(faceLm) : 0;
+      const targetBlink = isLmSet(faceLm) ? faceBlinkRatio(faceLm) : 0;
+
+      // Smooth interpolation
+      mState.mouthOpen += (targetMouth - mState.mouthOpen) * 0.35;
+      mState.blink     += (targetBlink - mState.blink)     * 0.4;
+
+      // Apply to all morph meshes
+      // Mouth: try Japanese name first, then English
+      const MOUTH_NAMES = ['\u3042', 'a'];      // あ or a
+      const BLINK_NAMES = ['\u307E\u3070\u305F\u304D', 'blink']; // まばたき or blink
+
+      for (const { mesh, dict } of morphMeshes) {
+        // Mouth opening
+        for (const name of MOUTH_NAMES) {
+          const idx = dict[name];
+          if (idx !== undefined) {
+            mesh.morphTargetInfluences[idx] = mState.mouthOpen;
+            break;
+          }
+        }
+        // Eye blink
+        for (const name of BLINK_NAMES) {
+          const idx = dict[name];
+          if (idx !== undefined) {
+            mesh.morphTargetInfluences[idx] = mState.blink;
+            break;
+          }
+        }
+      }
     }
   });
 
   return (
     <primitive
       object={scene}
-      scale={1.6}
-      position={[0, -1.5, 0]}
+      scale={0.1}
+      position={[0, -1.35, 0]}
     />
   );
 }

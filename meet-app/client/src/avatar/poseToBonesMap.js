@@ -1,6 +1,6 @@
 /**
  * MediaPipe landmark → GLB bone mapping.
- * Bone names are the EXACT strings from the connor_rk900 GLB skeleton.
+ * Bone names are the EXACT strings from the Shouko GLB skeleton (MMD/PMX export).
  *
  * Landmark sources per frame:
  *   pose_landmarks       – 33 body points  (index = integer key in sparse obj)
@@ -10,22 +10,22 @@
  */
 
 // ─── Upper-body segments only (source: pose_landmarks, 33 pts) ──────────────
-// We only have pose data for upper body, so lower body stays in rest T-pose.
+// We only have pose data for upper body, so lower body stays in rest pose.
 // MediaPipe pose indices used:
 //  0 nose  11 L-shoulder  12 R-shoulder  13 L-elbow   14 R-elbow
 // 15 L-wrist  16 R-wrist
 
 export const BODY_SEGMENTS = [
   // Left arm
-  { boneName: 'mixamorigLeftArm_09',      from: 11, to: 13 },
-  { boneName: 'mixamorigLeftForeArm_010', from: 13, to: 15 },
+  { boneName: 'Arm_L',   from: 11, to: 13 },
+  { boneName: 'Elbow_L', from: 13, to: 15 },
 
   // Right arm
-  { boneName: 'mixamorigRightArm_033',     from: 12, to: 14 },
-  { boneName: 'mixamorigRightForeArm_034', from: 14, to: 16 },
+  { boneName: 'Arm_R',   from: 12, to: 14 },
+  { boneName: 'Elbow_R', from: 14, to: 16 },
 
   // Neck
-  { boneName: 'mixamorigNeck_05', from: 12, to: 0 },
+  { boneName: 'Neck', from: 12, to: 0 },
 ];
 
 // ─── Left hand finger segments (source: left_hand_landmarks, 21 pts) ─────────
@@ -38,57 +38,57 @@ export const BODY_SEGMENTS = [
 // (Bone4 = tip leaf = no rotation needed)
 
 export const LEFT_HAND_SEGMENTS = [
-  { boneName: 'mixamorigLeftHandThumb1_012',  from: 1,  to: 2  },
-  { boneName: 'mixamorigLeftHandThumb2_013',  from: 2,  to: 3  },
-  { boneName: 'mixamorigLeftHandThumb3_014',  from: 3,  to: 4  },
+  { boneName: 'Thumb0_L',        from: 1,  to: 2  },
+  { boneName: 'Thumb1_L',        from: 2,  to: 3  },
+  { boneName: 'Thumb2_L',        from: 3,  to: 4  },
 
-  { boneName: 'mixamorigLeftHandIndex1_016',  from: 5,  to: 6  },
-  { boneName: 'mixamorigLeftHandIndex2_017',  from: 6,  to: 7  },
-  { boneName: 'mixamorigLeftHandIndex3_018',  from: 7,  to: 8  },
+  { boneName: 'IndexFinger1_L',  from: 5,  to: 6  },
+  { boneName: 'IndexFinger2_L',  from: 6,  to: 7  },
+  { boneName: 'IndexFinger3_L',  from: 7,  to: 8  },
 
-  { boneName: 'mixamorigLeftHandMiddle1_020', from: 9,  to: 10 },
-  { boneName: 'mixamorigLeftHandMiddle2_021', from: 10, to: 11 },
-  { boneName: 'mixamorigLeftHandMiddle3_022', from: 11, to: 12 },
+  { boneName: 'MiddleFinger1_L', from: 9,  to: 10 },
+  { boneName: 'MiddleFinger2_L', from: 10, to: 11 },
+  { boneName: 'MiddleFinger3_L', from: 11, to: 12 },
 
-  { boneName: 'mixamorigLeftHandRing1_024',   from: 13, to: 14 },
-  { boneName: 'mixamorigLeftHandRing2_025',   from: 14, to: 15 },
-  { boneName: 'mixamorigLeftHandRing3_026',   from: 15, to: 16 },
+  { boneName: 'RingFinger1_L',   from: 13, to: 14 },
+  { boneName: 'RingFinger2_L',   from: 14, to: 15 },
+  { boneName: 'RingFinger3_L',   from: 15, to: 16 },
 
-  { boneName: 'mixamorigLeftHandPinky1_028',  from: 17, to: 18 },
-  { boneName: 'mixamorigLeftHandPinky2_029',  from: 18, to: 19 },
-  { boneName: 'mixamorigLeftHandPinky3_030',  from: 19, to: 20 },
+  { boneName: 'LittleFinger1_L', from: 17, to: 18 },
+  { boneName: 'LittleFinger2_L', from: 18, to: 19 },
+  { boneName: 'LittleFinger3_L', from: 19, to: 20 },
 ];
 
 // ─── Right hand finger segments (source: right_hand_landmarks, 21 pts) ────────
 
 export const RIGHT_HAND_SEGMENTS = [
-  { boneName: 'mixamorigRightHandThumb1_036',  from: 1,  to: 2  },
-  { boneName: 'mixamorigRightHandThumb2_037',  from: 2,  to: 3  },
-  { boneName: 'mixamorigRightHandThumb3_038',  from: 3,  to: 4  },
+  { boneName: 'Thumb0_R',        from: 1,  to: 2  },
+  { boneName: 'Thumb1_R',        from: 2,  to: 3  },
+  { boneName: 'Thumb2_R',        from: 3,  to: 4  },
 
-  { boneName: 'mixamorigRightHandIndex1_040',  from: 5,  to: 6  },
-  { boneName: 'mixamorigRightHandIndex2_041',  from: 6,  to: 7  },
-  { boneName: 'mixamorigRightHandIndex3_042',  from: 7,  to: 8  },
+  { boneName: 'IndexFinger1_R',  from: 5,  to: 6  },
+  { boneName: 'IndexFinger2_R',  from: 6,  to: 7  },
+  { boneName: 'IndexFinger3_R',  from: 7,  to: 8  },
 
-  { boneName: 'mixamorigRightHandMiddle1_044', from: 9,  to: 10 },
-  { boneName: 'mixamorigRightHandMiddle2_045', from: 10, to: 11 },
-  { boneName: 'mixamorigRightHandMiddle3_00',  from: 11, to: 12 }, // note: _00 suffix in this model
+  { boneName: 'MiddleFinger1_R', from: 9,  to: 10 },
+  { boneName: 'MiddleFinger2_R', from: 10, to: 11 },
+  { boneName: 'MiddleFinger3_R', from: 11, to: 12 },
 
-  { boneName: 'mixamorigRightHandRing1_047',   from: 13, to: 14 },
-  { boneName: 'mixamorigRightHandRing2_048',   from: 14, to: 15 },
-  { boneName: 'mixamorigRightHandRing3_049',   from: 15, to: 16 },
+  { boneName: 'RingFinger1_R',   from: 13, to: 14 },
+  { boneName: 'RingFinger2_R',   from: 14, to: 15 },
+  { boneName: 'RingFinger3_R',   from: 15, to: 16 },
 
-  { boneName: 'mixamorigRightHandPinky1_051',  from: 17, to: 18 },
-  { boneName: 'mixamorigRightHandPinky2_052',  from: 18, to: 19 },
-  { boneName: 'mixamorigRightHandPinky3_053',  from: 19, to: 20 },
+  { boneName: 'LittleFinger1_R', from: 17, to: 18 },
+  { boneName: 'LittleFinger2_R', from: 18, to: 19 },
+  { boneName: 'LittleFinger3_R', from: 19, to: 20 },
 ];
 
 // ─── Face-driven bones ────────────────────────────────────────────────────────
-// This model has no Jaw bone — only head rotation is applied.
+// Shouko has no jaw bone — mouth opening is driven by morph targets instead.
 
 export const FACE_BONE_NAMES = {
-  head: 'mixamorigHead_06',
-  jaw:  null,                // no jaw bone in this rig
+  head: 'Head',
+  jaw:  null,   // mouth driven via morph targets (あ/a, い/i, う/u, え/e, お/o)
 };
 
 // Key face-mesh landmark indices used for head orientation
@@ -105,23 +105,13 @@ export const FACE_LM = {
 };
 
 // ─── Bone name resolver ───────────────────────────────────────────────────────
-// Bone names above are already exact; this still handles any edge-cases.
+// Shouko bone names are clean (no prefixes). Direct lookup with case-insensitive fallback.
 export function resolveBoneName(canonical, boneMap) {
   if (!canonical) return null;
-  // Direct exact lookup first (works for all hardcoded names above)
   if (boneMap[canonical]) return boneMap[canonical];
-  // Fallback variants for generic/canonical names
-  const try_ = (n) => boneMap[n] || null;
-  return (
-    try_(`mixamorig:${canonical}`) ||
-    try_(`mixamorig_${canonical}`) ||
-    try_(canonical.toLowerCase()) ||
-    // Prefix scan: find any bone whose name starts with mixamorig + canonical (case-insensitive)
-    Object.keys(boneMap).find((k) =>
-      k.toLowerCase().startsWith(`mixamorig${canonical.toLowerCase()}`)
-    ) && boneMap[Object.keys(boneMap).find((k) =>
-      k.toLowerCase().startsWith(`mixamorig${canonical.toLowerCase()}`)
-    )] ||
-    null
+  // Case-insensitive fallback
+  const key = Object.keys(boneMap).find(
+    (k) => k.toLowerCase() === canonical.toLowerCase()
   );
+  return key ? boneMap[key] : null;
 }
