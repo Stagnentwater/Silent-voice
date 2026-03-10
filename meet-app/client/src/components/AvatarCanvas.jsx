@@ -9,14 +9,15 @@ const MODE_3D = '3d';
 
 function ThreeScene({ posePacket, onWordChange }) {
   return (
-    <Canvas camera={{ position: [0, 0.55, 1.6], fov: 35 }} style={{ width: '100%', height: '100%' }}>
-      <ambientLight intensity={0.8} />
-      <directionalLight position={[2, 4, 3]} intensity={1.2} castShadow />
+    <Canvas camera={{ position: [0, 1.1, 2.0], fov: 36 }} style={{ width: '100%', height: '100%' }}>
+      <ambientLight intensity={1.0} />
+      <directionalLight position={[2, 4, 3]} intensity={1.5} castShadow />
+      <directionalLight position={[-2, 2, -1]} intensity={0.4} />
       <Suspense fallback={null}>
         <Environment preset="city" />
         <AvatarModel3D posePacket={posePacket} onWordChange={onWordChange} />
       </Suspense>
-      <OrbitControls enablePan={false} minDistance={1.0} maxDistance={4} target={[0, 0.3, 0]} />
+      <OrbitControls enablePan={false} minDistance={1.0} maxDistance={5} target={[0, 1.0, 0]} />
     </Canvas>
   );
 }

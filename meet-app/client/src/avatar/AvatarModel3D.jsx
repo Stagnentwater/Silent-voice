@@ -250,6 +250,45 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
 
   // ── Discover bones on load ─────────────────────────────────────────────
   useEffect(() => {
+    // ── Fix MMD-exported materials ───────────────────────────────────────
+    scene.traverse((obj) => {
+      if (obj.isMesh || obj.isSkinnedMesh) {
+        obj.frustumCulled = false;
+        if (obj.material) {
+          const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+          mats.forEach((mat) => {
+            mat.side = THREE.DoubleSide;
+            if (mat.transparent) {
+              mat.alphaTest = mat.alphaTest || 0.1;
+              mat.depthWrite = true;
+            }
+            mat.needsUpdate = true;
+          });
+        }
+      }
+    });
+
+    // ── Auto-scale: compute bounding box and normalize to target height ──
+    const bbox = new THREE.Box3().setFromObject(scene);
+    const size = new THREE.Vector3();
+    bbox.getSize(size);
+    const modelHeight = size.y;
+    const TARGET_HEIGHT = 1.7;
+    const autoScale = modelHeight > 0 ? TARGET_HEIGHT / modelHeight : 1;
+    scene.scale.setScalar(autoScale);
+
+    const center = new THREE.Vector3();
+    bbox.getCenter(center);
+    scene.position.set(
+      -center.x * autoScale,
+      -bbox.min.y * autoScale,
+      -center.z * autoScale
+    );
+
+    console.log('[AvatarModel3D] model bbox height:', modelHeight.toFixed(2),
+      '| autoScale:', autoScale.toFixed(4),
+      '| position:', scene.position.toArray().map(v => v.toFixed(2)));
+
     const allBones = {};
     scene.traverse((obj) => {
       if (obj.isBone || obj.type === 'Bone') allBones[obj.name] = obj;
@@ -486,8 +525,6 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
   return (
     <primitive
       object={scene}
-      scale={0.1}
-      position={[0, -1.35, 0]}
     />
   );
 }
