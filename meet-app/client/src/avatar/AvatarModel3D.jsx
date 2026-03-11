@@ -120,22 +120,50 @@ const _pInv = new THREE.Quaternion(); // ← FIX: was missing, caused ReferenceE
 // ─── Bone rotation helpers ───────────────────────────────────────────────────
 
 /**
+ * Resolve a landmark point, handling virtual midpoint keys.
+ * `idx` can be a number (direct landmark index) or a string:
+ *   'MID_SHOULDER' → midpoint of pose lm 11 + 12
+ *   'MID_HIP'      → midpoint of pose lm 23 + 24
+ *   'HAND_MID_L'   → hand landmark 9 (middle MCP) from left_hand_landmarks
+ *   'HAND_MID_R'   → hand landmark 9 from right_hand_landmarks
+ */
+function resolvePoint(poseLm, idx, extraLm) {
+  if (typeof idx === 'number' || (typeof idx === 'string' && /^\d+$/.test(idx))) {
+    return poseLm[idx] || poseLm[String(idx)] || null;
+  }
+  if (idx === 'MID_SHOULDER') {
+    const l = poseLm[11] || poseLm['11'];
+    const r = poseLm[12] || poseLm['12'];
+    if (!l || !r) return null;
+    return { x: (l.x + r.x) / 2, y: (l.y + r.y) / 2, z: ((l.z ?? 0) + (r.z ?? 0)) / 2 };
+  }
+  if (idx === 'MID_HIP') {
+    const l = poseLm[23] || poseLm['23'];
+    const r = poseLm[24] || poseLm['24'];
+    if (!l || !r) return null;
+    return { x: (l.x + r.x) / 2, y: (l.y + r.y) / 2, z: ((l.z ?? 0) + (r.z ?? 0)) / 2 };
+  }
+  if (idx === 'HAND_MID_L' && extraLm?.leftHand) {
+    return extraLm.leftHand[9] || extraLm.leftHand['9'] || null;
+  }
+  if (idx === 'HAND_MID_R' && extraLm?.rightHand) {
+    return extraLm.rightHand[9] || extraLm.rightHand['9'] || null;
+  }
+  return null;
+}
+
+/**
  * Compute the local-space quaternion that drives `bone` so its segment
  * (lm[from] → lm[to]) aligns with the corresponding landmark direction.
  *
- * Uses the bone's REST world direction (captured at load time) as the
- * reference axis — NOT the generic +Y — so T-pose bones that point
- * sideways (arms) or downward (legs) stay correct.
+ * Handles virtual midpoints: 'MID_SHOULDER', 'MID_HIP', 'HAND_MID_L', 'HAND_MID_R'.
  *
  * entry = { bone, restQuat, restWorldDir, parentRestWorldQuat }
  */
-function segmentQuat(lmArray, fromIdx, toIdx, entry) {
-  const lmF = lmArray[fromIdx];
-  const lmT = lmArray[toIdx];
-  if (!lmF || !lmT) {
-    console.warn(`[segmentQuat] missing landmark: from=${fromIdx}(${!!lmF}) to=${toIdx}(${!!lmT})`);
-    return null;
-  }
+function segmentQuat(lmArray, fromIdx, toIdx, entry, extraLm) {
+  const lmF = resolvePoint(lmArray, fromIdx, extraLm);
+  const lmT = resolvePoint(lmArray, toIdx, extraLm);
+  if (!lmF || !lmT) return null;
 
   _dir.subVectors(mpToV3(lmT), mpToV3(lmF));
   if (_dir.lengthSq() < 1e-8) return null;
@@ -457,7 +485,7 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
         console.log('[AvatarModel3D] face_landmarks present:', !!firstFrame.face_landmarks);
         // Test one segment to verify the quaternion pipeline
         if (poseLmKeys.length > 0) {
-          const testSeg = BODY_SEGMENTS[0]; // Arm_L
+          const testSeg = BODY_SEGMENTS.find(s => typeof s.from === 'number') || BODY_SEGMENTS[0];
           const testEntry = segBones[testSeg.boneName];
           if (testEntry) {
             const testQ = segmentQuat(firstFrame.pose_landmarks, testSeg.from, testSeg.to, testEntry);
@@ -491,11 +519,11 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
     const faceLm  = frame.face_landmarks;
 
     // ── Reusable segment driver ─────────────────────────────────────────
-    function driveSegments(lmArray, segments, alpha) {
+    function driveSegments(lmArray, segments, alpha, extraLm) {
       segments.forEach(({ boneName, from, to }) => {
         const e = segBones[boneName];
         if (!e) return;
-        const q = segmentQuat(lmArray, from, to, e);
+        const q = segmentQuat(lmArray, from, to, e, extraLm);
         e.bone.quaternion.slerp(q ?? e.restQuat, q ? alpha : 0.06);
       });
     }
@@ -509,7 +537,10 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
 
     // ── Body / upper limbs ──────────────────────────────────────────────
     if (isLmSet(poseLm)) {
-      driveSegments(poseLm, BODY_SEGMENTS, 0.5);
+      driveSegments(poseLm, BODY_SEGMENTS, 0.5, {
+        leftHand: leftLm,
+        rightHand: rightLm,
+      });
     } else {
       driftToRest(BODY_SEGMENTS);
     }
@@ -540,6 +571,11 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
     }
 
     // ── Morph targets: mouth & blink ─────────────────────────────────
+    // DISABLED: facial morph driving will be implemented separately.
+    // See poseToBonesMap.js "Facial Morph Target Plan" for the full approach.
+    // When ready, uncomment the block below and refine morph target names
+    // to match the shoko.glb dictionary (Japanese or English variants).
+    /*
     const mState = morphStateRef.current;
     const morphMeshes = morphMeshesRef.current;
     if (morphMeshes.length > 0) {
@@ -575,6 +611,7 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
         }
       }
     }
+    */ // end of disabled morph block
   });
 
   return (
