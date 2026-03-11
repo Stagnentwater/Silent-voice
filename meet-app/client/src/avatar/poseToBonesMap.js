@@ -22,9 +22,9 @@
 // 'MID_HIP'      = virtual midpoint of 23+24 (computed at runtime)
 
 export const BODY_SEGMENTS = [
-  // Torso
+  // Torso — only UpperBody; UpperBody2 follows as child in bone hierarchy.
+  // Driving both with the same direction doubles the rotation.
   { boneName: 'UpperBody',  from: 'MID_HIP',      to: 'MID_SHOULDER' },
-  { boneName: 'UpperBody2', from: 'MID_HIP',      to: 'MID_SHOULDER' },
 
   // Neck  (shoulder midpoint → nose)
   { boneName: 'Neck', from: 'MID_SHOULDER', to: 0 },
@@ -41,10 +41,9 @@ export const BODY_SEGMENTS = [
   { boneName: 'Elbow_L', from: 13, to: 15 },
   { boneName: 'Elbow_R', from: 14, to: 16 },
 
-  // Wrists (pose wrist → hand landmark 9 = middle-finger MCP)
-  // Resolved specially: uses left/right_hand_landmarks for the 'to' end.
-  { boneName: 'Wrist_L', from: 15, to: 'HAND_MID_L' },
-  { boneName: 'Wrist_R', from: 16, to: 'HAND_MID_R' },
+  // Wrists omitted for now — pose z and hand z are in different scales,
+  // mixing them produces distorted directions.  Wrist rotation will be
+  // added later via palm-normal computation from hand landmarks.
 ];
 
 // ─── Left hand finger segments (source: left_hand_landmarks, 21 pts) ─────────

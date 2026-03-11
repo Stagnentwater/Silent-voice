@@ -15,13 +15,15 @@ const GLB_PATH = '/shoko.glb';
 const TARGET_FRAME_MS = 200; // ~5 fps, 2× slower signing speed
 
 // ─── Coordinate conversion ───────────────────────────────────────────────────
-// MediaPipe: x-right, y-down, z-toward-camera (all 0-1 normalised)
+// MediaPipe: x-right, y-down, z-toward-camera
+//   x,y are 0-1 image-normalised
+//   z is in body-width units for pose (~-0.8 to +0.5), tiny for hand/face
 // Three.js:  x-right, y-up,   z-toward-viewer
 function mpToV3(lm) {
   return new THREE.Vector3(
     (lm.x - 0.5) * 2,
     -(lm.y - 0.5) * 2,
-    -(lm.z ?? 0) * 2
+    -(lm.z ?? 0) * 0.5   // damped: pose z is NOT in same scale as x/y
   );
 }
 
@@ -158,7 +160,7 @@ function resolvePoint(poseLm, idx, extraLm) {
  *
  * Handles virtual midpoints: 'MID_SHOULDER', 'MID_HIP', 'HAND_MID_L', 'HAND_MID_R'.
  *
- * entry = { bone, restQuat, restWorldDir, parentRestWorldQuat }
+ * entry = { bone, restQuat, restWorldDir, localRestDir }
  */
 function segmentQuat(lmArray, fromIdx, toIdx, entry, extraLm) {
   const lmF = resolvePoint(lmArray, fromIdx, extraLm);
@@ -167,18 +169,36 @@ function segmentQuat(lmArray, fromIdx, toIdx, entry, extraLm) {
 
   _dir.subVectors(mpToV3(lmT), mpToV3(lmF));
   if (_dir.lengthSq() < 1e-8) return null;
-  _dir.normalize();
+  _dir.normalize(); // target world direction
 
-  // World-space delta: rotate bone's rest direction → target direction
-  const worldDelta = new THREE.Quaternion().setFromUnitVectors(
-    entry.restWorldDir,
-    _dir
-  );
+  const bone = entry.bone;
 
-  // Convert world delta to local space:
-  //   localQ = inv(parentRestWorldQ) * worldDelta * restWorldQ
-  const parentInv = entry.parentRestWorldQuat.clone().invert();
-  return parentInv.multiply(worldDelta).multiply(entry.restWorldQuat);
+  // Get CURRENT parent world rotation (accounts for already-animated ancestors).
+  // getWorldQuaternion internally calls updateWorldMatrix(true, false), so
+  // any slerp applied to parent bones earlier this frame is picked up.
+  const parentWorldQ = new THREE.Quaternion();
+  if (bone.parent) {
+    bone.parent.getWorldQuaternion(parentWorldQ);
+  }
+
+  // World rotation the bone would have if its local rotation were at rest
+  // (but parents are animated).
+  const pretendWorldQ = parentWorldQ.clone().multiply(entry.restQuat);
+
+  // Direction this bone would point in that scenario
+  const pretendDir = entry.localRestDir.clone()
+    .applyQuaternion(pretendWorldQ).normalize();
+
+  // World delta: pretend → target
+  const worldDelta = new THREE.Quaternion().setFromUnitVectors(pretendDir, _dir);
+
+  // Convert world delta to local space:  localΔ = P⁻¹ · Rw · P
+  const localDelta = parentWorldQ.clone().invert()
+    .multiply(worldDelta)
+    .multiply(parentWorldQ);
+
+  // Target local quaternion = localΔ · restQuat
+  return localDelta.multiply(entry.restQuat);
 }
 
 /**
@@ -350,6 +370,14 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
 
     console.log('[AvatarModel3D] all GLB bones:', Object.keys(allBones).sort());
 
+    // For multi-child bones, prefer the chain continuation rather than
+    // a branch (e.g. UpperBody2 → Neck, not Shoulder_L).
+    const PREFERRED_CHAIN_CHILD = {
+      UpperBody:  'UpperBody2',
+      UpperBody2: 'Neck',
+      Neck:       'Head',
+    };
+
     // ── Helper: build a full bone entry with rest-pose world data ────────
     function makeBoneEntry(bone) {
       bone.updateWorldMatrix(true, false);
@@ -359,21 +387,19 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
         _m4.extractRotation(bone.matrixWorld)
       );
 
-      // World quaternion of parent in rest pose
-      let parentRestWorldQuat = new THREE.Quaternion(); // identity
-      if (bone.parent) {
-        bone.parent.updateWorldMatrix(true, false);
-        parentRestWorldQuat.setFromRotationMatrix(
-          _m4.extractRotation(bone.parent.matrixWorld)
-        );
-      }
-
       // Direction the bone points in world space — use child bone position
       // instead of assuming local +Y (MMD bones don't follow this convention)
       let restWorldDir;
       const boneWorldPos = new THREE.Vector3();
       bone.getWorldPosition(boneWorldPos);
-      const childBone = bone.children.find((c) => c.isBone || c.type === 'Bone');
+
+      // Pick the right child for restWorldDir
+      const preferName = PREFERRED_CHAIN_CHILD[bone.name];
+      const childBone = preferName
+        ? (bone.children.find((c) => (c.isBone || c.type === 'Bone') && c.name === preferName)
+           || bone.children.find((c) => c.isBone || c.type === 'Bone'))
+        : bone.children.find((c) => c.isBone || c.type === 'Bone');
+
       if (childBone) {
         childBone.updateWorldMatrix(true, false);
         const childWorldPos = new THREE.Vector3();
@@ -389,12 +415,18 @@ export function AvatarModel3D({ posePacket, onWordChange }) {
         restWorldDir = new THREE.Vector3(0, 1, 0).applyQuaternion(restWorldQuat);
       }
 
+      // Local rest direction — constant regardless of parent animation.
+      // Used by segmentQuat to compute the bone's current world dir when
+      // parent bones have already been driven this frame.
+      const localRestDir = restWorldDir.clone()
+        .applyQuaternion(restWorldQuat.clone().invert());
+
       return {
         bone,
         restQuat: bone.quaternion.clone(),
         restWorldQuat,
-        parentRestWorldQuat,
         restWorldDir,
+        localRestDir,
       };
     }
 
