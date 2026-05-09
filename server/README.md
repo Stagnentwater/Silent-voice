@@ -2,6 +2,21 @@
 
 Existing route `/pose` remains unchanged for migration safety.
 
+## Caller Routing Reference
+
+The web client controls where requests are sent with `VITE_APP_MODE` in `meet-app/client`.
+
+- Local mode (`VITE_APP_MODE=local`)
+	- API: `http://localhost:3001`
+	- Signaling: `ws://localhost:8080`
+	- Pose: `http://localhost:5000`
+- Production mode (`VITE_APP_MODE=prod`)
+	- API: deployed URL
+	- Signaling: deployed URL
+	- Pose exception (temporary): `http://127.0.0.1:5000`
+
+The production pose localhost target is intentional until pose deployment is available.
+
 ## 1) Control Plane: `POST /pose/sentence`
 
 Decides ordered sign targets from sentence text. Returns lightweight control data only.

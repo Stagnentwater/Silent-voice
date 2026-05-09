@@ -12,6 +12,7 @@ dependencies = [
     "google-generativeai>=0.8.6",
     "pandas>=2.3.3",
     "pgvector",
+    "psycopg2>=2.9.12",
     "psycopg2-binary>=2.9.11",
     "sentence-transformers>=5.2.0",
 ]

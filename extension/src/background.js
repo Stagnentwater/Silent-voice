@@ -2,34 +2,62 @@
 // Background service worker: performs network requests to local server on behalf of the content script
 // Returns { ok: true, data } or { ok: false, error }
 
-const DEFAULT_POSE_URL = 'http://127.0.0.1:5000/pose';
+const LOCAL_POSE_URL = 'http://127.0.0.1:5000/pose';
+const PROD_POSE_EXCEPTION_URL = 'http://127.0.0.1:5000/pose';
+const DEFAULT_POSE_URL = LOCAL_POSE_URL;
 const DEFAULT_POSE_FALLBACK_URL = 'https://executive-parliament-forecasts-diagram.trycloudflare.com/pose';
+const RUNTIME_MODE_LOCAL = 'local';
+const RUNTIME_MODE_PROD = 'prod';
 
-function normalizePoseUrl(url) {
-  const u = (url || '').trim();
-  if (!u) return DEFAULT_POSE_URL;
-  // Allow passing a base URL like https://my-api.vercel.app
-  if (!/\/pose\b/i.test(u)) {
-    return u.replace(/\/+$/, '') + '/pose';
+function inferRuntimeModeFromUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return RUNTIME_MODE_LOCAL;
+
+  try {
+    const parsed = new URL(raw);
+    if (['localhost', '127.0.0.1'].includes(parsed.hostname)) {
+      return RUNTIME_MODE_LOCAL;
+    }
+    return RUNTIME_MODE_PROD;
+  } catch {
+    return RUNTIME_MODE_LOCAL;
   }
-  return u;
 }
 
-function getPoseUrl(callback) {
+function getDefaultPoseUrlForRuntime(runtimeMode) {
+  if (runtimeMode === RUNTIME_MODE_PROD) {
+    // Production exception: keep pose endpoint local until deployed.
+    return PROD_POSE_EXCEPTION_URL;
+  }
+  return LOCAL_POSE_URL;
+}
+
+function normalizePoseUrl(url, fallbackUrl = DEFAULT_POSE_URL) {
+  const fallback = String(fallbackUrl || DEFAULT_POSE_URL).trim();
+  const u = (url || '').trim();
+  const base = u || fallback;
+  // Allow passing a base URL like https://my-api.vercel.app
+  if (!/\/pose\b/i.test(base)) {
+    return base.replace(/\/+$/, '') + '/pose';
+  }
+  return base;
+}
+
+function getPoseUrl(callback, runtimeDefaultUrl = DEFAULT_POSE_URL) {
   try {
     chrome.storage.sync.get({ poseApiUrl: '' }, (items) => {
-      callback(normalizePoseUrl(items.poseApiUrl));
+      callback(normalizePoseUrl(items.poseApiUrl, runtimeDefaultUrl));
     });
   } catch (e) {
-    callback(DEFAULT_POSE_URL);
+    callback(normalizePoseUrl(runtimeDefaultUrl));
   }
 }
 
-function buildPoseUrlCandidates(primaryUrl) {
-  const normalizedLocal = normalizePoseUrl(DEFAULT_POSE_URL);
-  const normalizedPrimary = normalizePoseUrl(primaryUrl);
+function buildPoseUrlCandidates(primaryUrl, runtimeDefaultUrl = DEFAULT_POSE_URL) {
+  const normalizedRuntimeDefault = normalizePoseUrl(runtimeDefaultUrl, runtimeDefaultUrl);
+  const normalizedPrimary = normalizePoseUrl(primaryUrl, runtimeDefaultUrl);
   const normalizedFallback = normalizePoseUrl(DEFAULT_POSE_FALLBACK_URL);
-  return [normalizedLocal, normalizedPrimary, normalizedFallback].filter((value, index, all) => {
+  return [normalizedRuntimeDefault, normalizedPrimary, normalizedFallback].filter((value, index, all) => {
     return Boolean(value) && all.indexOf(value) === index;
   });
 }
@@ -45,8 +73,8 @@ function fetchPose(words, url) {
   });
 }
 
-async function fetchPoseWithFallback(words, primaryUrl) {
-  const candidates = buildPoseUrlCandidates(primaryUrl);
+async function fetchPoseWithFallback(words, primaryUrl, runtimeDefaultUrl = DEFAULT_POSE_URL) {
+  const candidates = buildPoseUrlCandidates(primaryUrl, runtimeDefaultUrl);
   let lastError = null;
 
   for (let index = 0; index < candidates.length; index += 1) {
@@ -78,16 +106,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || message.type !== 'FETCH_POSE') return;
 
   const words = message.words || '';
+  const runtimeMode = inferRuntimeModeFromUrl(sender?.url);
+  const runtimeDefaultUrl = getDefaultPoseUrlForRuntime(runtimeMode);
 
   getPoseUrl((poseUrl) => {
-    const url = normalizePoseUrl(message.url || poseUrl);
-    fetchPoseWithFallback(words, url)
+    const url = normalizePoseUrl(message.url || poseUrl, runtimeDefaultUrl);
+    fetchPoseWithFallback(words, url, runtimeDefaultUrl)
       .then(({ data, url: usedUrl }) => sendResponse({ ok: true, data, url: usedUrl }))
       .catch((err) => {
         console.error('[sign-engine][background] fetch error', err);
         sendResponse({ ok: false, error: String(err), url });
       });
-  });
+  }, runtimeDefaultUrl);
 
   // Return true to indicate we will call sendResponse asynchronously
   return true;
@@ -394,15 +424,22 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onMessage.addListener(async (msg) => {
     if (!msg || msg.type !== 'FETCH_POSE') return;
     try {
+      const runtimeMode = inferRuntimeModeFromUrl(port?.sender?.url);
+      const runtimeDefaultUrl = getDefaultPoseUrlForRuntime(runtimeMode);
+
       getPoseUrl(async (poseUrl) => {
-        const url = normalizePoseUrl(msg.url || poseUrl);
+        const url = normalizePoseUrl(msg.url || poseUrl, runtimeDefaultUrl);
         try {
           port.postMessage({ type: 'POSE_META', url });
         } catch (e) {
           // ignore
         }
 
-        const { data, url: usedUrl } = await fetchPoseWithFallback(msg.words || '', url);
+        const { data, url: usedUrl } = await fetchPoseWithFallback(
+          msg.words || '',
+          url,
+          runtimeDefaultUrl
+        );
         if (usedUrl !== url) {
           try {
             port.postMessage({ type: 'POSE_META', url: usedUrl });
@@ -415,7 +452,7 @@ chrome.runtime.onConnect.addListener((port) => {
           port.postMessage({ type: 'POSE_CHUNK', frames: data.slice(i, i + CHUNK) });
         }
         port.postMessage({ type: 'POSE_DONE' });
-      });
+      }, runtimeDefaultUrl);
     } catch (e) {
       port.postMessage({ type: 'POSE_ERROR', message: String(e) });
     }

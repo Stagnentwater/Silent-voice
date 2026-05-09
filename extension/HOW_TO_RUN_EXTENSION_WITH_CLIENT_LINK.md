@@ -68,8 +68,12 @@ You should now see Silent Voice extension loaded.
 ## Step 5: Configure pose server URL in extension popup
 
 The extension currently works like this:
-- It tries local pose server first: http://127.0.0.1:5000/pose
+- It uses localhost pose by default: http://127.0.0.1:5000/pose
 - If local is not reachable, it automatically falls back to the public tunnel URL
+
+Runtime routing expectation with the web client:
+- Local mode (`VITE_APP_MODE=local`): API/signaling/pose all target local services
+- Production mode (`VITE_APP_MODE=prod`): API/signaling target deployed services, but pose intentionally remains localhost until deployed
 
 To set or change URL manually:
 
@@ -155,4 +159,4 @@ They only need:
 
 ## One-line quick summary
 
-Load extension/build in Chrome, open client link, test pose URL in popup, and use the app. The extension will try localhost first and only use public fallback if localhost is unavailable.
+Load extension/build in Chrome, open client link, test pose URL in popup, and use the app. Pose defaults to localhost in both local mode and current production-exception mode, with public fallback only if localhost fails.

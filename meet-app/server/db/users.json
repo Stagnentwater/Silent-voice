@@ -28,5 +28,10 @@
     "id": "f1b5b094-b5db-45fa-897a-f812972f3f44",
     "username": "ruhi",
     "password_hash": "$2b$12$TtaLivPTiBBx3WBzC3pkx.qbQgs7N7l2ozQGCIRxaML7ljT7tnXJO"
+  },
+  {
+    "id": "a813ea0d-0719-4cd2-9ad7-baa1d880fe67",
+    "username": "ayushman:)",
+    "password_hash": "$2b$12$zGcfVLO3e58c4ruXempuYeWDg.UFuuejBWZj8OIfN9NBJUlZpK/hO"
   }
 ]

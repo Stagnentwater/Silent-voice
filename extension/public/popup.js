@@ -11,7 +11,8 @@ document.addEventListener('DOMContentLoaded', () => {
   const poseTestBtn = document.getElementById('pose-test-btn');
   const poseStatus = document.getElementById('pose-status');
 
-  const DEFAULT_POSE_URL = 'http://127.0.0.1:5000/pose';
+  const CANONICAL_LOCAL_POSE_BASE = 'http://127.0.0.1:5000';
+  const DEFAULT_POSE_URL = `${CANONICAL_LOCAL_POSE_BASE}/pose`;
 
   function normalizePoseUrl(url) {
     const u = (url || '').trim();
@@ -33,10 +34,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const url = normalizePoseUrl(items.poseApiUrl);
         // Show as base URL when possible
         poseUrlInput.value = url.replace(/\/pose\b.*/i, '');
-        setStatus(`Using: ${url}`, 'muted');
+        setStatus(`Using: ${url} (prod exception keeps pose on localhost)`, 'muted');
       });
     } catch (e) {
-      poseUrlInput.value = 'http://127.0.0.1:5000';
+      poseUrlInput.value = CANONICAL_LOCAL_POSE_BASE;
       setStatus('Using local default.', 'muted');
     }
   }
@@ -106,8 +107,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   if (poseUseLocalBtn) {
     poseUseLocalBtn.addEventListener('click', () => {
-      if (poseUrlInput) poseUrlInput.value = 'http://127.0.0.1:5000';
-      savePoseUrl('http://127.0.0.1:5000');
+      if (poseUrlInput) poseUrlInput.value = CANONICAL_LOCAL_POSE_BASE;
+      savePoseUrl(CANONICAL_LOCAL_POSE_BASE);
     });
   }
 

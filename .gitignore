@@ -5,7 +5,17 @@ desktop.ini
 .idea/
 .vscode/
 *.code-workspace
-node_modules
+*.swp
+*.swo
+.history/
+
+# Local notes / generated context
+CONTEXT.md
+*.local.md
+
+# Dependencies
+node_modules/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -25,7 +35,9 @@ pip-wheel-metadata/
 share/python-wheels/
 .pytest_cache/
 .mypy_cache/
+.ruff_cache/
 .pyre/
+.hypothesis/
 .tox/
 .nox/
 .coverage
@@ -33,17 +45,40 @@ share/python-wheels/
 htmlcov/
 .ipynb_checkpoints/
 .python-version
+.uv-cache/
+uv-cache/
 
 # Virtual environments / Env files
 .env
 .env.*
 !.env.example
+.envrc
 .venv/
 venv/
 env/
+ENV/
 
 # Project data (large/local)
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.dump
+*.bak
+*.tmp
+*.pid
+*.pid.lock
+meet-app/server/db/*.local.json
 
+# Secrets / certificates
+*.pem
+*.key
+*.crt
+*.cert
+*.p12
+*.pfx
 
 # Node/Extension artifacts
 extension/node_modules/
@@ -52,11 +87,20 @@ extension/.parcel-cache/
 extension/.temp/
 extension/build/
 extension/release/
+extension/*.crx
 extension/npm-debug.log*
 extension/yarn-debug.log*
 extension/yarn-error.log*
 extension/pnpm-debug.log*
 extension/*.zip
+
+# App/deployment caches
+.cache/
+.vite/
+.vercel/
+.netlify/
+.turbo/
+storybook-static/
 
 # Root accidental files
 /package-lock.json
